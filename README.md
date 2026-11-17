@@ -12,12 +12,13 @@ and TXT files**.
 * The application **never generates questions**; it only works with imported ones.
 * The user interface is Georgian; code and technical documentation are English.
 
-> **Status: Phase 2 of 10 — database and import.** Working: the full question
-> schema with integrity rules, import of paired TXT files and the refined
-> master (`REFINED_MASTER_QBANK.txt`) with a dry run, Georgian validation
-> report and confirmed import, verified automatic backups, and real question
-> counts in the window. Browsing, editing, approval and export arrive in later
-> phases (see [ARCHITECTURE.md](ARCHITECTURE.md)).
+> **Status: Phase 3 of 10 — question browser, search, reviewer profile and
+> session persistence.** Working: importing questions (Phase 2), browsing all
+> 12 subjects, a read-only question detail view with the correct answer
+> highlighted, full-text search (SQLite FTS5 trigram with a LIKE fallback),
+> review-progress statistics, a local reviewer profile, return-to-where-you-stopped
+> on the next start, and manual verified backups. Editing, approval and export
+> arrive in later phases (see [ARCHITECTURE.md](ARCHITECTURE.md)).
 
 ---
 
@@ -74,8 +75,11 @@ The data folder can also be set with the `VASCQBANK_DATA_DIR` environment variab
 | Windows | `%LOCALAPPDATA%\VascQBank-Desktop` |
 | Linux | `$XDG_DATA_HOME/vascqbank-desktop` (usually `~/.local/share/vascqbank-desktop`) |
 
-Inside: `database/vascqbank.sqlite3`, `backups/` (verified automatic backups
-before every import and migration, each with a JSON manifest), `exports/`, `logs/`.
+Inside: `database/vascqbank.sqlite3` (the authoritative database),
+`database/search-index.sqlite3` (a derived search index — safe to delete, rebuilt
+automatically), `backups/` (verified backups, each with a JSON manifest),
+`exports/`, `logs/` and `settings.json` (reviewer name, last subject / question /
+status filter, window geometry; written atomically, never in the repository).
 The menu **ფაილი → მონაცემთა საქაღალდის გახსნა** opens it.
 Do not place the data folder inside OneDrive/Dropbox/Google Drive sync folders
 while the application is running.
@@ -93,6 +97,44 @@ while the application is running.
 
 Existing questions are never changed by an import. Use one source format per
 question ID — see ARCHITECTURE.md §7.1.
+
+## Browsing, search and sessions
+
+* **Catalog** (*კითხვები*): choose a subject in the sidebar (or *ყველა თემა*), filter by
+  review status, sort, and click a question. The list is lazy — only the ordered
+  IDs are resolved up front and the text of a page of rows is read when it scrolls
+  into view — so it stays instant with all 10,000 questions.
+* **Detail view**: ID, Georgian subject, full question, the five options ა–ე with
+  the correct one highlighted (colour *and* the words „სწორი პასუხი“), full
+  explanation, status, current revision number, source file/line, import time and
+  last-modified time. Text can be selected and copied; there are no edit or
+  approval controls yet. Opening a question never changes anything in the database.
+* **Navigation**: *← წინა* / *შემდეგი →* (Alt+←/→), and *გადასვლა* (Ctrl+G) for an ID such as
+  `ALI-0042` or a bare number inside the open subject.
+* **Search** (Ctrl+F): works on Georgian word fragments across question text,
+  answers, explanations and IDs; several words must all match. It runs in the
+  background and never blocks the window; clearing the box (or Esc) restores the
+  previous list. SQLite FTS5 with the trigram tokenizer is used when available and
+  a LIKE scan otherwise (always for terms shorter than three characters); the result
+  list says which one answered.
+* **Progress**: counts of total / pending / in review / approved / rejected for the
+  whole bank and the open subject, read from the database.
+* **Reviewer profile** (*რეცენზენტი*): pick *რამაზი აფხაძე*, *დავით ფარღალავა* or type any
+  name. No password or account; the name is stored locally for future edit and
+  approval records and never rewrites history.
+* **Session**: the last subject, status filter, question and window geometry are
+  restored on the next start. If the remembered question no longer matches the
+  filter, the nearest following one is shown with an explanation.
+* **Backups** (*სარეზერვო ასლები*): create a verified backup now, see every backup with
+  its time, type, size and verification result. Restoring is deliberately not
+  offered yet.
+
+### Screenshots
+
+Rendered from the real window with **synthetic** data (10,000 artificial questions) by
+`tools/capture_screenshots.py`; see [docs/screenshots/phase3](docs/screenshots/phase3):
+home dashboard, catalog with the correct answer highlighted, search results with highlighted
+previews, a filtered subject after a jump, backups and the reviewer profile.
 
 ## Tests
 
@@ -115,13 +157,14 @@ src/vascqbank_desktop/
 ├── app/           startup: arguments, logging, wiring
 ├── config/        constants and cross-platform paths
 ├── domain/        subjects, answer letters, statuses, question IDs, ImportedQuestion
-├── db/            SQLite policy, ownership check, migrations, schema, backups, repository
-├── services/      use cases: storage init, two-stage import, counts
+├── db/            SQLite policy, ownership check, migrations, schema, backups, repositories, search index
+├── services/      use cases: storage init, import, counts, catalog/search, settings, session, backups
 ├── validation/    text normalisation, issue catalogue (Georgian), content rules
 ├── importexport/  file discovery, paired-TXT and refined-master parsers, UTF-8 I/O
-├── ui/            PySide6 widgets, import dialog, worker thread, strings, theme
+├── ui/            PySide6 widgets: catalog, detail, backups, reviewer, import; strings, theme, workers
 └── resources/     bundled fonts (Noto Sans, Noto Sans Georgian) and icon
-tests/             pytest suite, incl. layer-boundary and offline checks
+tools/             capture_screenshots.py — renders the real window with synthetic data
+tests/             pytest suite, incl. layer-boundary, offline and 10,000-question checks
 ```
 
 ## Data protection

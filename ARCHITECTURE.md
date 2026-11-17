@@ -1,6 +1,6 @@
 # VascQBank Review Desktop — Architecture
 
-This document describes the architecture implemented in Phase 1 and the design
+This document describes the architecture implemented in Phases 1–3 and the design
 that later phases implement. Sections marked **(implemented)** describe code
 that exists and is tested; sections marked **(design)** are the plan.
 
@@ -47,7 +47,7 @@ that exists and is tested; sections marked **(design)** are the plan.
 | `validation` | text normalisation; later structural question checks | Qt, sqlite3, upper layers |
 | `importexport` | strict UTF-8 I/O; later TXT/master parsers, TXT/DOCX writers | Qt, ui, app |
 | `db` | connection policy, ownership check, migrations; later repositories | Qt, services, ui, app |
-| `services` | use cases (storage init; later import, edit, approve, backup, export) | Qt, ui, app |
+| `services` | use cases (storage init, import, catalog/search, settings, session, backups; later edit, approve, export) | Qt, ui, app |
 | `ui` | widgets, Georgian strings, fonts, theme | sqlite3, db, app |
 | `app` | entry point and composition root | — |
 
@@ -57,8 +57,11 @@ the build if a rule above is broken. It also fails on any networking import
 provably offline.
 
 The UI never receives a `sqlite3` connection: services return immutable
-dataclasses (e.g. `StorageStatus`). This keeps widgets testable without a
-database and keeps SQL out of the UI.
+dataclasses (e.g. `StorageStatus`, `QuestionDetail`). This keeps widgets testable
+without a database and keeps SQL out of the UI. A plain enum that is part of a
+service result (e.g. `BackupProblem`) is re-exported by the service module, so
+the UI still never imports the `db` package — `tests/test_architecture.py`
+enforces it, and caught exactly such a slip while Phase 3 was written.
 
 ## 3. Startup sequence (implemented)
 
@@ -72,6 +75,10 @@ database and keeps SQL out of the UI.
 5. GUI: set Windows AppUserModelID / Linux desktop-file name, create
    `QApplication`, register bundled fonts, apply theme, initialise storage
    (error dialog and exit code 2 on failure — nothing is modified), show window.
+6. The main window then (Phase 3) restores its geometry if it is still reachable on
+   a connected screen, reads the real counts, restores the working session
+   (§15.5, read-only) and starts building/refreshing the derived search index on a
+   background thread (§15.2).
 
 ## 4. Storage foundation (implemented)
 
@@ -166,7 +173,14 @@ revision made SQLite scan `questions` for deferred references, and the
 10,000-question import took 27.7 s instead of 1.0 s. A test now fails if any
 foreign-key column lacks an index.
 
-The full-text search table moves to the browsing/search phase (migration 3).
+**Full-text search is not part of this schema.** The Phase 1 plan was an FTS5
+table added by migration 3. Phase 3 deliberately keeps it *out of* the
+authoritative database (schema stays at version 2): a derived, disposable index
+file lives beside it (§15.2). Reason: a bundled seed database, a backup and every
+write would otherwise depend on an optional SQLite extension (triggers calling
+FTS5 make *all* writes fail on a build without it, and backup verification counts
+every table). The existing indexes already give index-ordered plans for browsing
+(§15.1), so no migration was needed.
 
 ### 5.3 Text and time
 
@@ -189,10 +203,37 @@ services. Measured in the development environment (Linux, Python 3.13):
 | Dry run against a database already holding 10,000 | 0.6 s | < 10 s |
 | Database size with 10,000 questions | 33.5 MB | — |
 
-Dry runs and imports run on a background `QThread` (`ui/workers.py`) with
-their own SQLite connection, so the window stays responsive. Browsing and
-search design (summary model, `fetchMore`, FTS5 trigram) is unchanged and
-arrives in Phase 3.
+Dry runs and imports run on a background worker-pool thread (`ui/workers.py`,
+§15.3) with their own SQLite connection, so the window stays responsive.
+
+### Phase 3 — browsing and search (measured)
+
+`tests/test_browse_performance.py`, same 10,000 synthetic questions (all 12 subjects at
+their target counts; a spread of statuses), Linux, Python 3.13, SQLite 3.53, offscreen Qt.
+Medians of repeated runs; two complete runs agreed within ≈15 %.
+
+| Operation | Measured | Test budget |
+|---|---:|---:|
+| Catalog load: all 10,000 ordered ids + first page of 100 rows | 4 ms | < 250 ms |
+| Whole catalog view ready (widgets, ids, first page, counts) | 59 ms | < 2 s |
+| Subject switch (ids + first page; median / worst of 12) | 1.7 / 2.0 ms | < 250 ms |
+| Subject switch in the GUI (list reloaded) | 1.7 ms | < 300 ms |
+| Status filter · sort by status (10,000 ids) | 1.5 · 9.5 ms | < 250 · 400 ms |
+| Open a question (service read) · in the GUI incl. detail rebuild | 0.4 · 1.4 ms | < 20 · 100 ms |
+| Jump to a far question by ID (GUI) · "next question" (GUI) | 6.6 · 3.2 ms | < 500 · 100 ms |
+| FTS5 search: selective term · by ID · all 10,000 hits | 1.8 · 1.4 · 11.8 ms | < 100 · 100 · 500 ms |
+| FTS5 search + subject + status filters | 5.4 ms | < 250 ms |
+| LIKE fallback: full scan · short (< 3 characters) term | 29 · 21 ms | < 1 s |
+| Preview rows for one page of search results (100) | 2.2 ms | < 250 ms |
+| Search in the GUI until the list is updated (background thread) | 27 ms | < 2 s |
+| Derived index: first build (10,000) · refresh with nothing to do | 410 · 8.7 ms | < 8 s |
+| Python memory while paging through all 10,000 rows (bounded cache) | 0.96 MB | < 20 MB |
+| Process RSS: window + catalog + 10,000 ids | 102 → 115 MB | +< 250 MB |
+| Database file · derived search index | 33.7 MB · 19.9 MB | — |
+
+Query-plan tests assert index-ordered listing without a temporary sort, primary-key-only
+lookups for a page and for a detail, and that a page of 100 rows costs exactly one
+`SELECT` and reads no revision history (no N+1 pattern).
 
 ## 7. Question import and validation (implemented)
 
@@ -346,8 +387,12 @@ Implemented (`db/backup.py`):
 * **Retention**: the 20 most recent automatic backups are kept; manual ones
   are never pruned.
 
-Design (later phase): manual "create backup now" / "save backup as…",
-start-up backup if the last one is older than 24 h, and **restore**: validate
+Implemented in Phase 3 (§15.6): manual "create backup now" (reason `manual`, never
+pruned), and the backup list with creation time, type, size and a re-verification
+(size, SHA-256, `integrity_check`, row counts against the manifest).
+
+Design (later phase): "save backup as…", start-up backup if the last one is older
+than 24 h, and **restore**: validate
 the chosen backup → safety backup of the current database → close
 connections → atomic replace → remove stale `-wal`/`-shm` → reopen and migrate.
 
@@ -420,8 +465,186 @@ connections → atomic replace → remove stale `-wal`/`-shm` → reopen and mig
 | Backups: verification, corruption, retention, pre-migration | pytest | implemented |
 | Import dialog | pytest-qt, offscreen | implemented |
 | 10,000-record performance | `perf` marker, synthetic data | implemented |
+| Catalog, search (FTS5 + LIKE parity), session, settings, backups services | pytest, synthetic data (`tests/bank.py` seeds through the real repository) | implemented |
+| Catalog page, detail rendering, main-window integration, session restore | pytest-qt, offscreen | implemented |
+| 10,000-question browse/search benchmark, query plans, memory | `perf` marker | implemented |
 | Revision/approval services, round-trip export | pytest | later phases |
 | Packaged builds | CI smoke run of the EXE/AppImage | packaging phase |
 
 Offscreen GUI tests verify widget structure and wiring; they are not a
 substitute for a visual check on a real Windows and Linux desktop.
+
+## 15. Browsing, search, reviewer profile and session (implemented — Phase 3)
+
+### 15.1 Catalog and detail
+
+* **Ids first, text later.** A listing resolves only the ordered question ids
+  (`db/catalog_repository.py::list_ids`, ≈2 ms for all 10,000; index-ordered, no
+  sort, because `UNIQUE (subject_code, source_number)` already orders each subject).
+  `ui/question_list_model.py` is a random-access `QAbstractListModel` over those
+  ids; a page of 100 rows is fetched with **one** `IN (…)` query the first time a row
+  is needed (primary-key lookups into `questions` and the current revision) and at
+  most 16 pages are cached. Jumping to row 9,000 loads one page. No query reads
+  revision history; `questions.current_revision_id` is followed directly.
+* **Identity is independent of ordering.** Filters (subject, status, search text)
+  and sort orders (number, status, last modified) only choose *which* ids are listed
+  and in what order; rows, the detail panel and navigation work on the immutable
+  `question_uid` / database id. A test opens the same question under every sort and
+  filter.
+* **Read-only by construction.** All catalog reads use `PRAGMA query_only = ON`
+  connections and `db/catalog_repository.py` contains no write statement (tested);
+  a test snapshots every authoritative table before and after browsing, searching,
+  jumping, restoring a session and changing the reviewer name.
+* **Detail panel** (`ui/question_detail_view.py`): all clinical text is HTML-escaped
+  and shown with `white-space: pre-wrap`, so `PaO2 < 60 mmHg & <b>` displays
+  literally and runs of spaces and line breaks are kept (tested by round-tripping
+  through `QTextDocument`). The correct option is marked by colour *and* the words
+  „სწორი პასუხი“. Labels are selectable/copyable; a button copies the whole question.
+  No edit or approval control exists.
+
+### 15.2 Search
+
+* **Definition** (`domain/search.py`): the text is split on whitespace into terms; a
+  question matches if **every** term occurs (substring, so word fragments work) in
+  its *current* revision text — ID, stem, options ა–ე, explanation — joined by newlines.
+  FTS5 operators and LIKE wildcards in the input are literal (every FTS term is
+  quoted, every LIKE term escaped).
+* **FTS5 + trigram** (`db/search_index.py`): a separate derived file
+  `database/search-index.sqlite3` holds one row per question (`rowid = questions.id`,
+  `tokenize='trigram'`) plus `doc_state(question_id, revision_id)` and `meta`. It is
+  `ATTACH`ed to the read-only connection, so one SQL statement joins index hits with
+  the subject/status filter and the catalog ordering. Builds take ≈0.3 s per 10,000
+  questions; the file is ≈2.3× the text size (≈20 MB for the synthetic bank).
+* **Freshness is cheap and exact.** `(database_id, count, sum(current_revision_id))`
+  is compared on every search; revisions are append-only and the current revision only
+  moves forward, so any edit raises the sum. A stale index is reconciled per question
+  (`doc_state`): ≤300 differences (an edit or two) are synchronised *inside* the
+  search that notices them; more (first build, a big import) are left to the
+  background warm-up and that search uses LIKE. A different `database_id` (database
+  replaced) triggers a rebuild. Phase 4 therefore needs no index hook, but may call
+  `CatalogService.ensure_search_index()` in the background after saving to avoid the
+  first-search wait.
+* **LIKE fallback** (`catalog_repository.search_ids_like`): used when FTS5 trigram is
+  unavailable, when any term has fewer than three characters, when the index is
+  missing, stale beyond the inline limit, damaged or locked, and when an FTS query
+  raises. ≈20–28 ms for 10,000 questions. A test compares both back ends on many
+  queries (identical id lists) and simulates missing FTS5 support, a damaged index
+  file, another database's index and a failing FTS query.
+* **Never on the UI thread.** The catalog view debounces typing (250 ms), submits the
+  search to a `LatestOnlyRunner` (one call at a time, only the newest waiting request is
+  kept) and discards any result whose generation is no longer current — including a
+  late result that arrives after the reviewer cleared the box (a test fails if that
+  guard is removed). Clearing the box restores the previous catalog at once.
+* **Previews**: single-line excerpts around the first match (field named: question /
+  answer ა–ე / explanation / ID), match ranges highlighted by the list delegate.
+
+### 15.3 Threading model
+
+`ui/workers.py`: `BackgroundJob` runs one call on Qt's `QThreadPool` through a
+`QRunnable`; results return as queued signals of a UI-thread `QObject`. `LatestOnlyRunner`
+serialises calls and keeps only the newest waiting request. Services open their own
+short-lived SQLite connection per call (0.3 ms), so any thread may call them.
+
+*History.* An earlier version of this module used a `QThread` per job with a task object
+moved into it. Under pytest-qt it caused rare heap corruption (glibc `corrupted
+double-linked list`, about one run in nine of the catalog GUI tests). The root cause inside
+that thread/object lifecycle was not pinned to a single line, but garbage collection, FTS5,
+list painting and the worker classes in isolation were each ruled out by experiment, and
+running the search on the UI thread never crashed. After switching to `QThreadPool` there
+were no crashes in 8 complete suite runs and 80 runs of the GUI test files.
+
+### 15.4 Reviewer profile and settings
+
+`services/settings_service.py`: `settings.json` in the data directory, written
+atomically (temporary file in the same directory → `fsync` → `os.replace`, retried on
+Windows sharing violations). Loading never fails: an unreadable or corrupt file is moved
+to `settings.json.corrupt-<time>` and defaults are used; every value is validated
+individually (known subject and status, canonical question id, bounded geometry);
+unknown keys written by a newer version survive a save. The reviewer name
+(`domain/reviewer.py`: NFC, collapsed whitespace, ≤80 characters, no control/format
+characters) is available to future services through `ReviewerProfile.require_name()`
+(raises `ReviewerNotSetError` when unset). It is never written to the database in
+this phase, so history cannot change when the name changes (tested).
+
+### 15.5 Session restore
+
+Saved: subject, status filter, last opened question uid, window geometry (and the
+reviewer name). Writes are debounced (500 ms) and flushed on close, so a crash loses at
+most the last half second. `services/session_service.py::restore_context` decides what to
+show, without writing anything:
+
+1. unknown or now-empty subject → all subjects;
+2. the remembered question still matches the filter → open it;
+3. it exists but no longer matches (e.g. approved meanwhile) → the **closest following**
+   question that matches, else the closest preceding one; the reviewer is told why;
+4. the filter matches nothing → the status filter is cleared and the question shown;
+5. the question no longer exists → the first question of the filter, with a notice.
+
+Window geometry is restored only if enough of it overlaps a connected screen
+(`ui/window_state.py`), otherwise the default size is used.
+
+### 15.6 Backups UI
+
+`services/backup_service.py` + `ui/backup_view.py`: create a verified backup on a worker
+thread, list backups newest first, and verify them in the background (manifest size and
+SHA-256, read-only open, `integrity_check`, per-table counts). A damaged backup is shown as
+damaged with the reason. There is **no restore action** (§10).
+
+## 16. Seed database distribution (design — documentation only in Phase 3)
+
+The finished bank will ship *inside* the application as a validated SQLite database.
+
+**Building the seed (developer side, packaging phase).**
+1. Source of truth: the 12 subject-specific paired TXT files. The refined master stays a
+   separately supported import source; it is not the seed's source.
+2. A build tool (`tools/build_seed.py`, later) runs the **same import pipeline**
+   (`dry_run` + `commit_import`) into a fresh database — there is no second code path, so
+   strict UTF-8, NFC, structural validation, fingerprints and every constraint apply.
+3. Acceptance gates: the expected count per subject, every question `PENDING_REVIEW`, no
+   validation errors or duplicate IDs, `PRAGMA integrity_check` ok, our `application_id`,
+   the current schema version. A `seed-manifest.json` records the seed version, per-subject
+   counts, SHA-256 of every source file and of the seed database, and the build date.
+4. Seed and manifest are bundled as read-only package data.
+
+**First launch.** If no database exists in the user-data directory: verify the bundled
+seed (hash and counts against the manifest, `integrity_check`), copy it to a `.partial`
+file in the **writable user-data directory**, verify the copy, rename atomically, give it a
+fresh `database_id` (the seed's id is kept as `seed_database_id`, with `seed_version` and
+`seeded_at`, in `app_metadata`) and run the normal migrations (with their automatic
+backup). If the database is missing but backups exist the application does **not** silently
+re-seed; it offers the newest verified backup or an explicit fresh start. All edits affect
+the writable copy only; the bundled seed is never opened read-write.
+
+**Updates.** An update replaces application files (and its bundled seed) only; the data
+directory is outside the application folder, so reviewer work is never overwritten. A newer
+seed is **never merged automatically**: a "compare with bundled seed" action would reuse the
+import dry-run — new IDs are offered as pending, identical ones skipped, and a differing
+fingerprint is a *conflict* that is listed and never applied (§7.4). Schema changes ship as
+forward-only migrations on the user's database, not by re-copying the seed.
+
+**Invariants.** The application never generates or invents questions; the seed holds only
+what the 12 source files hold; `original_content_json` keeps the seed's content immutable.
+
+## 17. Extension points for Phase 4 (editor, autosave, crash-safe drafts)
+
+* **Writes** belong in a new `services/edit_service.py`: append a revision, move
+  `current_revision_id`, bump `lock_version` (optimistic concurrency, §8), write the
+  `review_events` row and the status transition in **one** `BEGIN IMMEDIATE` transaction,
+  stamping `ReviewerProfile.require_name()` as author/actor. `tests/bank.py::simulate_edit`
+  and `set_status` perform exactly these writes and show the invariants the triggers enforce.
+* **Search** needs no change: the index detects new revisions (§15.2); call
+  `CatalogService.ensure_search_index()` on a background thread after a save if the next
+  search must not pay for the reconcile.
+* **Drafts / autosave**: keep unsaved text out of `question_revisions` (append-only) — a new
+  migration (version 3) for a `drafts` table keyed by question id, written in short
+  transactions, or a draft file per question next to `settings.json`. `QuestionDetailView`
+  is read-only by design; build the editor as a separate widget (or an edit mode) and reuse
+  `OptionRow` for the display state.
+* **UI hooks**: `CatalogView.open_question()` is the single place a question is shown;
+  `contextChanged` already feeds session saving; `CatalogView.refresh()` re-runs the current
+  filter after a status change, and `CatalogService.nearest_id()` plus
+  `ResultSet.next_id()` give the "move on to the next question" behaviour when the current
+  one leaves a filtered list.
+* **Invariants to keep**: no write from the catalog code paths (`query_only`), the layer rules
+  (UI imports no `db`), Georgian text preserved byte-exactly (`paragraphs_html` round-trip),
+  the unchanged-database snapshot tests.

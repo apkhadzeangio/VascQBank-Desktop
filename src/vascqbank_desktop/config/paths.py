@@ -27,6 +27,8 @@ from vascqbank_desktop.config.constants import (
     APP_SLUG,
     DATA_DIR_ENV_VAR,
     DATABASE_FILENAME,
+    SEARCH_INDEX_FILENAME,
+    SETTINGS_FILENAME,
 )
 
 
@@ -43,6 +45,16 @@ class AppPaths:
     @property
     def database_file(self) -> Path:
         return self.database_dir / DATABASE_FILENAME
+
+    @property
+    def search_index_file(self) -> Path:
+        """Derived full-text index; safe to delete, rebuilt automatically."""
+        return self.database_dir / SEARCH_INDEX_FILENAME
+
+    @property
+    def settings_file(self) -> Path:
+        """Reviewer profile and working-session state (per data directory)."""
+        return self.data_dir / SETTINGS_FILENAME
 
     @property
     def backups_dir(self) -> Path:

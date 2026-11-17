@@ -24,6 +24,7 @@ import re
 import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 
 from vascqbank_desktop import __version__
@@ -136,6 +137,82 @@ def create_backup(conn: sqlite3.Connection, backups_dir: Path, reason: str) -> B
     manifest["app_version"] = __version__
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return info
+
+
+class BackupProblem(StrEnum):
+    NONE = "NONE"
+    MISSING_FILE = "MISSING_FILE"
+    SIZE_MISMATCH = "SIZE_MISMATCH"
+    CHECKSUM_MISMATCH = "CHECKSUM_MISMATCH"
+    UNREADABLE = "UNREADABLE"  # not a valid database, or integrity_check failed
+    COUNTS_MISMATCH = "COUNTS_MISMATCH"
+
+
+@dataclass(frozen=True, slots=True)
+class BackupCheck:
+    """Result of re-verifying an existing backup file (read-only)."""
+
+    ok: bool
+    problem: BackupProblem
+    has_manifest: bool
+    schema_version: int | None = None
+    table_counts: dict[str, int] | None = None
+    message: str = ""
+
+
+def read_manifest(backup_path: Path) -> dict[str, object] | None:
+    """The JSON manifest beside a backup, or ``None`` if absent or unreadable."""
+    manifest_path = backup_path.with_name(backup_path.name + ".json")
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _failure(problem: BackupProblem, message: str, *, has_manifest: bool) -> BackupCheck:
+    return BackupCheck(False, problem, has_manifest, message=message)
+
+
+def check_backup_file(path: Path) -> BackupCheck:
+    """Verify an existing backup: size and SHA-256 against its manifest (when there is
+    one), then open it read-only and run ``integrity_check`` and compare row counts.
+
+    Never modifies the backup. Used by the backup list; creating a backup already
+    performs the same verification before the file is accepted.
+    """
+    if not path.is_file():
+        return _failure(BackupProblem.MISSING_FILE, f"{path.name} does not exist", has_manifest=False)
+    manifest = read_manifest(path)
+    has_manifest = manifest is not None
+    try:
+        if manifest is not None:
+            expected_size = manifest.get("size")
+            if isinstance(expected_size, int) and path.stat().st_size != expected_size:
+                return _failure(
+                    BackupProblem.SIZE_MISMATCH, "file size differs from the manifest", has_manifest=True
+                )
+            expected_hash = manifest.get("sha256")
+            if isinstance(expected_hash, str) and _sha256_file(path) != expected_hash:
+                return _failure(
+                    BackupProblem.CHECKSUM_MISMATCH, "SHA-256 differs from the manifest", has_manifest=True
+                )
+        version, _database_id, counts = verify_backup(path)
+    except (BackupError, OSError) as exc:
+        return _failure(BackupProblem.UNREADABLE, str(exc), has_manifest=has_manifest)
+    if manifest is not None and manifest.get("table_counts") not in (None, counts):
+        return BackupCheck(
+            False, BackupProblem.COUNTS_MISMATCH, True, version, counts, "row counts differ from the manifest"
+        )
+    return BackupCheck(True, BackupProblem.NONE, has_manifest, version, counts)
 
 
 def list_backups(backups_dir: Path) -> list[Path]:

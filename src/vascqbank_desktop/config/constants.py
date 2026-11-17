@@ -23,5 +23,11 @@ DATABASE_FILENAME: Final = "vascqbank.sqlite3"
 # other program and must not be opened or migrated.
 SQLITE_APPLICATION_ID: Final = 0x56514244
 
+# Local, per-installation files inside the data directory. Neither belongs to
+# the source repository.
+SETTINGS_FILENAME: Final = "settings.json"
+# Derived full-text index (rebuildable at any time; never authoritative data).
+SEARCH_INDEX_FILENAME: Final = "search-index.sqlite3"
+
 # Environment variable that overrides the data directory (tests, portable use).
 DATA_DIR_ENV_VAR: Final = "VASCQBANK_DATA_DIR"

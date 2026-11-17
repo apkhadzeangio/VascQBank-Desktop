@@ -14,9 +14,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from vascqbank_desktop.domain.review_status import ReviewStatus
+from vascqbank_desktop.services.question_stats import ProgressSummary
 from vascqbank_desktop.services.storage import StorageStatus
 from vascqbank_desktop.ui import strings
+from vascqbank_desktop.ui.progress_panel import ProgressPanel
 
 
 def _card(object_name: str = "Card") -> tuple[QFrame, QVBoxLayout]:
@@ -41,6 +42,7 @@ class WelcomeView(QWidget):
     """Home page: empty state or bank summary, storage facts, roadmap."""
 
     importRequested = Signal()
+    resumeRequested = Signal()
 
     def __init__(self, status: StorageStatus, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -67,8 +69,10 @@ class WelcomeView(QWidget):
         page.addSpacing(6)
 
         self.empty_card = self._build_empty_state()
+        self.resume_card = self._build_resume_card()
         self.bank_card = self._build_bank_card()
         page.addWidget(self.empty_card)
+        page.addWidget(self.resume_card)
         page.addWidget(self.bank_card)
         page.addWidget(self._build_storage_card(status))
         page.addWidget(self._build_roadmap())
@@ -89,20 +93,34 @@ class WelcomeView(QWidget):
         layout.addLayout(row)
         return card
 
+    def _build_resume_card(self) -> QFrame:
+        card, layout = _card("EmptyStateCard")
+        layout.addWidget(_label(strings.HOME_RESUME_TITLE, "CardTitle"))
+        self.resume_label = _label("", "CardBody")
+        layout.addWidget(self.resume_label)
+        self.resume_button = QPushButton(strings.HOME_RESUME_BUTTON)
+        self.resume_button.setObjectName("PrimaryButton")
+        self.resume_button.clicked.connect(self.resumeRequested)
+        row = QHBoxLayout()
+        row.addWidget(self.resume_button)
+        row.addStretch(1)
+        layout.addLayout(row)
+        card.hide()
+        return card
+
+    def set_resume(self, uid: str | None) -> None:
+        """Offer to continue at the question the reviewer last had open."""
+        self.resume_card.setVisible(bool(uid))
+        if uid:
+            self.resume_label.setText(strings.HOME_RESUME_BODY.format(uid=uid))
+
     def _build_bank_card(self) -> QFrame:
         card, layout = _card()
         layout.addWidget(_label(strings.BANK_TITLE, "CardTitle"))
         self.bank_total_label = _label("", "BankTotal")
         layout.addWidget(self.bank_total_label)
-        self.bank_status_labels: dict[ReviewStatus, QLabel] = {}
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(28)
-        for column, status in enumerate(ReviewStatus):
-            label = _label("", "FieldValue", wrap=False)
-            self.bank_status_labels[status] = label
-            grid.addWidget(label, 0, column)
-        grid.setColumnStretch(len(ReviewStatus), 1)
-        layout.addLayout(grid)
+        self.progress_panel = ProgressPanel(framed=False)
+        layout.addWidget(self.progress_panel)
         layout.addWidget(_label(strings.BANK_NOTE, "CardBody"))
         self.bank_import_button = QPushButton(strings.IMPORT_BUTTON)
         self.bank_import_button.setObjectName("SecondaryButton")
@@ -113,8 +131,7 @@ class WelcomeView(QWidget):
         layout.addLayout(row)
         return card
 
-    def set_bank_counts(self, total: int, subjects_with_questions: int,
-                        by_status: dict[ReviewStatus, int]) -> None:
+    def set_bank_counts(self, total: int, subjects_with_questions: int) -> None:
         """Switch between the empty state and the bank summary."""
         has_questions = total > 0
         self.empty_card.setVisible(not has_questions)
@@ -123,9 +140,11 @@ class WelcomeView(QWidget):
             strings.BANK_TOTAL.format(total=f"{total:,}".replace(",", "\u00a0"),
                                       subjects=subjects_with_questions)
         )
-        for status, label in self.bank_status_labels.items():
-            label.setText(strings.BANK_STATUS_ROW.format(label=status.label_ka,
-                                                         count=by_status.get(status, 0)))
+
+    def set_progress(
+        self, bank: ProgressSummary, subject: ProgressSummary | None, subject_name: str | None
+    ) -> None:
+        self.progress_panel.set_progress(bank, subject, subject_name)
 
     def _build_storage_card(self, status: StorageStatus) -> QFrame:
         card, layout = _card()

@@ -29,3 +29,19 @@ def data_dir(tmp_path: Path) -> Path:
 @pytest.fixture
 def app_paths(data_dir: Path) -> AppPaths:
     return AppPaths(data_dir=data_dir)
+
+
+@pytest.fixture(scope="session")
+def styled_qapp():
+    """One QApplication with the bundled fonts and the real theme, shared by the Phase 3 GUI tests."""
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from vascqbank_desktop.ui.fonts import build_ui_font, register_bundled_fonts
+    from vascqbank_desktop.ui.theme import apply_theme
+
+    app = QApplication.instance() or QApplication([])
+    register_bundled_fonts()
+    app.setFont(build_ui_font())
+    apply_theme(app)
+    return app

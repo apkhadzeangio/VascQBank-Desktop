@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from enum import StrEnum
+
+from vascqbank_desktop.domain.subjects import is_known_subject
 
 _PATTERN = re.compile(r"^([A-Z][A-Z0-9_]{1,31})-(\d{4,})$")
 
@@ -46,3 +49,61 @@ class QuestionId:
 def format_question_id(subject_code: str, source_number: int) -> str:
     digits = f"{source_number:04d}" if source_number < 10_000 else str(source_number)
     return f"{subject_code}-{digits}"
+
+
+class ReferenceProblem(StrEnum):
+    EMPTY = "EMPTY"
+    NEEDS_SUBJECT = "NEEDS_SUBJECT"
+    UNKNOWN_SUBJECT = "UNKNOWN_SUBJECT"
+    BAD_FORMAT = "BAD_FORMAT"
+
+
+class InvalidReference(ValueError):
+    """What the reviewer typed into "go to question" is not a usable reference."""
+
+    def __init__(self, problem: ReferenceProblem, text: str) -> None:
+        self.problem = problem
+        self.text = text
+        super().__init__(f"{problem.value}: {text!r}")
+
+
+# subject code (lazy, so "ALI0042" and "PAD_CLTI-0001" both split correctly),
+# optional separator, number.
+_REFERENCE = re.compile(r"([A-Z][A-Z0-9_]*?)[\s_\-–—]*(\d{1,7})")
+_MAX_REFERENCE_LENGTH = 64
+
+
+def _upper_ascii(text: str) -> str:
+    # str.upper() would turn Georgian letters into Mtavruli capitals; subject
+    # codes are ASCII, so only ASCII letters are folded.
+    return "".join(c.upper() if "a" <= c <= "z" else c for c in text)
+
+
+def parse_reference(text: str, default_subject: str | None = None) -> QuestionId:
+    """Interpret what a reviewer typed as a question reference.
+
+    Accepted: the full ID in any case and with tolerant separators
+    (``ALI-0042``, ``ali 42``, ``PAD_CLTI-1``) or a bare question number, which
+    is resolved inside *default_subject* (the subject currently open).
+    """
+    cleaned = " ".join(text.split())
+    if not cleaned:
+        raise InvalidReference(ReferenceProblem.EMPTY, text)
+    if len(cleaned) > _MAX_REFERENCE_LENGTH:
+        raise InvalidReference(ReferenceProblem.BAD_FORMAT, text)
+    cleaned = _upper_ascii(cleaned)
+
+    if cleaned.isascii() and cleaned.isdigit():
+        if not default_subject:
+            raise InvalidReference(ReferenceProblem.NEEDS_SUBJECT, text)
+        code, number = default_subject, int(cleaned)
+    else:
+        match = _REFERENCE.fullmatch(cleaned)
+        if match is None:
+            raise InvalidReference(ReferenceProblem.BAD_FORMAT, text)
+        code, number = match.group(1), int(match.group(2))
+    if number <= 0:
+        raise InvalidReference(ReferenceProblem.BAD_FORMAT, text)
+    if not is_known_subject(code):
+        raise InvalidReference(ReferenceProblem.UNKNOWN_SUBJECT, text)
+    return QuestionId(code, number)

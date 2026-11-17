@@ -45,6 +45,11 @@ exports/
 logs/
 *.log
 
+# Reviewer profile and working-session state (lives in the data directory, never in the repository)
+/settings.json
+settings.json.corrupt-*
+.settings.json.*.tmp
+
 # Real question data and generated documents
 *_questions.txt
 *_explanations.txt
