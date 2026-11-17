@@ -1,0 +1,77 @@
+# ---------------------------------------------------------------
+# VascQBank Review Desktop — never commit question data, local
+# databases, exports, backups, logs or secrets.
+# ---------------------------------------------------------------
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.egg
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.python-version
+
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# Local databases (SQLite and its WAL/SHM/journal side files)
+*.sqlite
+*.sqlite3
+*.db
+*.db3
+*-wal
+*-shm
+*-journal
+
+# Application data folders (if a data dir is ever pointed inside the repo)
+/data/
+/local-data/
+backups/
+exports/
+logs/
+*.log
+
+# Real question data and generated documents
+*_questions.txt
+*_explanations.txt
+REFINED_MASTER_QBANK.txt
+*.docx
+*.doc
+!tests/fixtures/**
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+secrets*
+credentials*
+
+# Packaging artefacts
+*.exe
+*.msi
+*.AppImage
+*.zip
+*.tar.gz
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
