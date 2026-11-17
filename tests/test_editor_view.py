@@ -26,7 +26,7 @@ from bank import (  # noqa: E402
     simulate_edit,
     snapshot,
 )
-from PySide6.QtCore import QEvent, Qt  # noqa: E402
+from PySide6.QtCore import QEvent, QEventLoop, Qt, QTimer  # noqa: E402
 from PySide6.QtGui import QKeyEvent  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
@@ -112,6 +112,13 @@ class Env:
         detail = CatalogService(self.paths).detail_by_uid(uid)
         assert detail is not None
         return detail.content
+
+
+def pump_event_loop(milliseconds: int) -> None:
+    """Run the Qt event loop for a while *without* holding the GIL (unlike ``QTest.qWait``)."""
+    loop = QEventLoop()
+    QTimer.singleShot(milliseconds, loop.quit)
+    loop.exec()
 
 
 def type_text(widget, text: str) -> None:
@@ -727,9 +734,14 @@ def test_deleting_the_page_during_a_write_is_safe(env: Env, monkeypatch, qtbot, 
     shiboken6.delete(view)  # the C++ page is gone while the worker is still inside the database call
     request.node.qt_widgets.clear()  # (pytest-qt would otherwise try to close the dead widget)
     release.set()
-    for _ in range(20):  # let the finished worker deliver its result to a (possibly) dead page
-        QTest.qWait(20)
+    # Let the finished worker deliver its result to a (possibly) dead page, then look for the
+    # draft. Wait in a real event loop: QTest.qWait keeps the GIL, which starves the worker
+    # thread (a 40-commit job took 2.2 s under qWait and 0.07 s in an event loop).
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and draft_row(env.paths, UID) is None:
+        pump_event_loop(20)
     assert draft_row(env.paths, UID) is not None  # the write completed regardless
+    pump_event_loop(100)  # and the late signal reached nothing dead
 
 
 # ------------------------------------------------------------------ history

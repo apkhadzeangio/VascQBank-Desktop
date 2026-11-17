@@ -841,6 +841,13 @@ Reviewed again after the heap corruption of Phase 3 (§15.3):
   from a queued signal (so shutdown never depends on the event loop).
 * Services open a connection per call; the draft write lock serialises draft writes; the
   catalog (search) runs on its own latest-only runner, unchanged.
+* Test-harness note: `QTest.qWait` (and therefore `qtbot.wait`) keeps the GIL while it spins, which
+  starves background threads — a worker doing 40 short SQLite commits took 2.2 s under `qWait`
+  and 0.07 s inside a real `QEventLoop` (the application's own `app.exec()` behaves like the
+  latter). A repeated GUI run exposed this as a ≈12 % flake in a test that waited a fixed 400 ms;
+  it was a test artefact, not a lost write (the worker always resumed within 20 ms), and the test
+  now waits in a real event loop for the condition. Tests that wait for a worker use
+  `qtbot.waitUntil(<condition>)` with a generous timeout, never a fixed `qtbot.wait`.
 * Test coverage: a page deleted while a draft write is still inside the database call, a
   window closed while a slow write runs, stale outcomes after switching questions, failing
   writes, and repeated runs of the whole GUI test set (results in the Phase 4 report).
