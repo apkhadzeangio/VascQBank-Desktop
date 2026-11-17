@@ -50,6 +50,9 @@ class _Runnable(QRunnable):
             try:
                 result = self._fn(self._signals.progress.emit) if self._report_progress else self._fn()
             except Exception as exc:  # reported to the UI, never swallowed
+                # Logged here as well: a job whose creator did not connect `failed` must still
+                # leave a trace (the traceback is not available once it crosses the thread).
+                log.exception("Background call failed: %s", exc)
                 self._signals.failed.emit(exc)
             else:
                 self._signals.succeeded.emit(result)

@@ -21,12 +21,16 @@ from vascqbank_desktop.config.paths import AppPaths
 from vascqbank_desktop.domain.review_status import ReviewStatus
 from vascqbank_desktop.domain.subjects import Subject
 from vascqbank_desktop.services.catalog_service import CatalogService, SearchIndexStatus
+from vascqbank_desktop.services.draft_service import DraftService
+from vascqbank_desktop.services.edit_service import EditService
 from vascqbank_desktop.services.question_stats import BankCounts, bank_counts, summarize
 from vascqbank_desktop.services.session_service import restore_context
 from vascqbank_desktop.services.settings_service import ReviewerProfile, SavedSession, SettingsStore
 from vascqbank_desktop.services.storage import StorageStatus
 from vascqbank_desktop.ui import strings
+from vascqbank_desktop.ui.autosave import DEFAULT_DELAY_MS
 from vascqbank_desktop.ui.backup_view import BackupView
+from vascqbank_desktop.ui.catalog_editing import EditingServices
 from vascqbank_desktop.ui.catalog_view import CatalogView
 from vascqbank_desktop.ui.import_dialog import ImportDialog
 from vascqbank_desktop.ui.reviewer_view import ReviewerView
@@ -57,6 +61,8 @@ class MainWindow(QMainWindow):
         subjects: Sequence[Subject],
         app_icon: QIcon | None = None,
         settings_store: SettingsStore | None = None,
+        *,
+        autosave_delay_ms: int = DEFAULT_DELAY_MS,
     ) -> None:
         super().__init__()
         self._status = status
@@ -66,6 +72,8 @@ class MainWindow(QMainWindow):
         self.settings_store = settings_store or SettingsStore(self._paths.settings_file)
         self.reviewer_profile = ReviewerProfile(self.settings_store)
         self.catalog_service = CatalogService(self._paths)
+        self.draft_service = DraftService(self._paths)
+        self.edit_service = EditService(self._paths, self.reviewer_profile)
         self.index_status: SearchIndexStatus | None = None
         self._warmup_job: BackgroundJob | None = None
         self._warmup_again = False
@@ -86,7 +94,12 @@ class MainWindow(QMainWindow):
         self.pages = QStackedWidget()
         self._page_index: dict[str, int] = {}
         self.welcome_view = WelcomeView(status)
-        self.catalog_view = CatalogView(self.catalog_service, subjects)
+        self.catalog_view = CatalogView(
+            self.catalog_service,
+            subjects,
+            editing=EditingServices(self.edit_service, self.draft_service, self.reviewer_profile),
+            autosave_delay_ms=autosave_delay_ms,
+        )
         self.backup_view = BackupView(self._paths)
         self.reviewer_view = ReviewerView(self.reviewer_profile)
         self._add_page(PAGE_HOME, self.welcome_view)
@@ -107,9 +120,13 @@ class MainWindow(QMainWindow):
         self.sidebar.subjectRequested.connect(self.open_subject)
         self.welcome_view.importRequested.connect(self.open_import_dialog)
         self.welcome_view.resumeRequested.connect(lambda: self.show_page(PAGE_CATALOG))
+        self.welcome_view.draftsRequested.connect(self.open_draft_list)
         self.catalog_view.importRequested.connect(self.open_import_dialog)
         self.catalog_view.contextChanged.connect(self._on_context_changed)
         self.catalog_view.questionOpened.connect(self.welcome_view.set_resume)
+        self.catalog_view.questionSaved.connect(lambda _result: self.refresh_counts())
+        self.catalog_view.draftsChanged.connect(self._on_drafts_changed)
+        self.catalog_view.reviewerRequired.connect(lambda: self.show_page(PAGE_REVIEWER))
         self.reviewer_view.reviewerChanged.connect(self._on_reviewer_changed)
         self._build_menus()
         self._build_status_bar()
@@ -119,6 +136,7 @@ class MainWindow(QMainWindow):
             self.resize(DEFAULT_WIDTH, DEFAULT_HEIGHT)
         self.refresh_counts()
         self._restore_session()
+        self._on_drafts_changed(self.draft_service.count())
         self._start_index_warmup()
 
     # -- data ------------------------------------------------------------
@@ -166,12 +184,24 @@ class MainWindow(QMainWindow):
         index = self._page_index.get(key)
         if index is None:
             return
+        if key != PAGE_CATALOG and self.pages.currentWidget() is self.catalog_view:
+            self.catalog_view.flush_editor_draft()  # leaving the page persists the pending draft
         self.pages.setCurrentIndex(index)
         self.sidebar.select_page(key)
         if key == PAGE_BACKUPS:
             self.backup_view.refresh()
         elif key == PAGE_REVIEWER:
             self.reviewer_view.refresh()
+
+    def open_draft_list(self) -> None:
+        """Show the list of unfinished drafts (recovery) on top of the catalog."""
+        self.show_page(PAGE_CATALOG)
+        self.catalog_view.open_draft_list()
+
+    def _on_drafts_changed(self, count: int) -> None:
+        self.drafts_label.setText(strings.STATUS_DRAFTS.format(count=count))
+        self.drafts_label.setVisible(count > 0)
+        self.welcome_view.set_drafts(count)
 
     def open_subject(self, code: str | None) -> None:
         """Browse one subject (or all subjects when *code* is ``None``)."""
@@ -277,6 +307,18 @@ class MainWindow(QMainWindow):
             questions_menu, strings.ACTION_GOTO, "Ctrl+G", self.catalog_view.focus_goto
         )
         questions_menu.addSeparator()
+        # Edit / history / drafts: the shortcuts (Ctrl+E, Ctrl+H) live in the catalog page itself, so
+        # these menu entries only show them (text after the tab) and never compete with them.
+        self.action_edit = self._catalog_action(
+            questions_menu, f"{strings.ACTION_EDIT}\tCtrl+E", None, self.catalog_view.start_editing
+        )
+        self.action_history = self._catalog_action(
+            questions_menu, f"{strings.ACTION_HISTORY}\tCtrl+H", None, self.catalog_view.show_history
+        )
+        self.action_drafts = QAction(strings.ACTION_DRAFTS, self)
+        self.action_drafts.triggered.connect(self.open_draft_list)
+        questions_menu.addAction(self.action_drafts)
+        questions_menu.addSeparator()
         self.action_previous = self._catalog_action(
             questions_menu, strings.ACTION_PREVIOUS, "Alt+Left", self.catalog_view.previous_question
         )
@@ -289,9 +331,10 @@ class MainWindow(QMainWindow):
         self.action_about.triggered.connect(self._show_about)
         help_menu.addAction(self.action_about)
 
-    def _catalog_action(self, menu, title: str, shortcut: str, handler) -> QAction:  # noqa: ANN001
+    def _catalog_action(self, menu, title: str, shortcut: str | None, handler) -> QAction:  # noqa: ANN001
         action = QAction(title, self)
-        action.setShortcut(QKeySequence(shortcut))
+        if shortcut:
+            action.setShortcut(QKeySequence(shortcut))
 
         def run() -> None:
             self.show_page(PAGE_CATALOG)
@@ -308,6 +351,9 @@ class MainWindow(QMainWindow):
         self.bank_label = QLabel()
         bar.addWidget(self.bank_label)
         name = self.reviewer_profile.name
+        self.drafts_label = QLabel()
+        self.drafts_label.hide()
+        bar.addWidget(self.drafts_label)
         self.reviewer_label = QLabel(
             strings.STATUS_REVIEWER.format(name=name) if name else strings.STATUS_REVIEWER_NONE
         )
@@ -335,6 +381,11 @@ class MainWindow(QMainWindow):
 
     # -- shutdown --------------------------------------------------------
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        # The draft is written (and confirmed) before anything else; if that is impossible and the
+        # reviewer keeps the text, the window stays open.
+        if not self.catalog_view.prepare_shutdown():
+            event.ignore()
+            return
         self._flush_session()
         try:
             self.settings_store.set_window_geometry(encode_geometry(self))

@@ -128,3 +128,27 @@ class ResultSet:
         if position is None:
             return self.ids[-1]
         return self.ids[position - 1] if position > 0 else None
+
+
+@dataclass(frozen=True, slots=True)
+class RevisionInfo:
+    """One row of a question's revision history (no text — see :class:`RevisionDetail`)."""
+
+    id: int
+    question_id: int
+    revision_no: int
+    origin: str  # IMPORT / EDIT / RESTORE
+    author: str
+    note: str | None
+    created_at: str  # UTC ISO-8601
+    is_current: bool
+    was_approved: bool  # an APPROVE event is bound to exactly this revision
+    from_status: ReviewStatus | None = None  # status change recorded with this revision, if any
+    to_status: ReviewStatus | None = None
+    event_note: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RevisionDetail:
+    info: RevisionInfo
+    content: QuestionContent

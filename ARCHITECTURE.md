@@ -1,6 +1,6 @@
 # VascQBank Review Desktop — Architecture
 
-This document describes the architecture implemented in Phases 1–3 and the design
+This document describes the architecture implemented in Phases 1–4 and the design
 that later phases implement. Sections marked **(implemented)** describe code
 that exists and is tested; sections marked **(design)** are the plan.
 
@@ -43,11 +43,11 @@ that exists and is tested; sections marked **(design)** are the plan.
 | Package | Responsibility | Must not import |
 |---|---|---|
 | `config` | constants, cross-platform paths | Qt, sqlite3, any upper layer |
-| `domain` | subjects, answer letters ა–ე, review statuses, question IDs; later entities and rules | Qt, sqlite3, db, services, ui, app, importexport |
+| `domain` | subjects, answer letters ა–ე, review statuses and the edit transitions, question IDs, edit validation, word-level text diff | Qt, sqlite3, db, services, ui, app, importexport |
 | `validation` | text normalisation; later structural question checks | Qt, sqlite3, upper layers |
 | `importexport` | strict UTF-8 I/O; later TXT/master parsers, TXT/DOCX writers | Qt, ui, app |
-| `db` | connection policy, ownership check, migrations; later repositories | Qt, services, ui, app |
-| `services` | use cases (storage init, import, catalog/search, settings, session, backups; later edit, approve, export) | Qt, ui, app |
+| `db` | connection policy, ownership check, migrations, repositories (questions, catalog, drafts, edits) | Qt, services, ui, app |
+| `services` | use cases (storage init, import, catalog/search, settings, session, backups, **drafts, edits**; later approve, export) | Qt, ui, app |
 | `ui` | widgets, Georgian strings, fonts, theme | sqlite3, db, app |
 | `app` | entry point and composition root | — |
 
@@ -124,9 +124,11 @@ environment); Ubuntu 22.04's system SQLite 3.37.2 is the oldest relevant case.
   (§10).
 
 Migration 1: `schema_migrations`, `app_metadata`. Migration 2: the question
-schema (§5). Existing Phase 1 databases are backed up and then migrated.
+schema (§5). Migration 3 (Phase 4): `drafts` and `draft_discards` (§5.4, §17).
+Existing databases are backed up and then migrated; version 3 only *adds*
+tables, so no existing row is touched.
 
-## 5. Data model (implemented — migration 2, `db/schema_v2.py`)
+## 5. Data model (implemented — migration 2 `db/schema_v2.py`, migration 3 `db/schema_v3.py`)
 
 ### 5.1 Identity
 
@@ -174,13 +176,13 @@ revision made SQLite scan `questions` for deferred references, and the
 foreign-key column lacks an index.
 
 **Full-text search is not part of this schema.** The Phase 1 plan was an FTS5
-table added by migration 3. Phase 3 deliberately keeps it *out of* the
-authoritative database (schema stays at version 2): a derived, disposable index
-file lives beside it (§15.2). Reason: a bundled seed database, a backup and every
-write would otherwise depend on an optional SQLite extension (triggers calling
-FTS5 make *all* writes fail on a build without it, and backup verification counts
-every table). The existing indexes already give index-ordered plans for browsing
-(§15.1), so no migration was needed.
+table added by a migration. Phase 3 deliberately keeps it *out of* the
+authoritative database: a derived, disposable index file lives beside it (§15.2).
+Reason: a bundled seed database, a backup and every write would otherwise depend
+on an optional SQLite extension (triggers calling FTS5 make *all* writes fail on a
+build without it, and backup verification counts every table). The existing
+indexes already give index-ordered plans for browsing (§15.1). Phase 3 therefore
+needed no migration; **migration 3 is the Phase 4 draft schema** (§5.4).
 
 ### 5.3 Text and time
 
@@ -188,6 +190,23 @@ every table). The existing indexes already give index-ordered plans for browsing
   alters Georgian letters; Georgian text is stored byte-identical (tested).
 * Timestamps: UTC ISO-8601 with offset (`2026-11-17T17:20:00+00:00`), shown in
   the computer's local time zone.
+
+### 5.4 Drafts (migration 3, `db/schema_v3.py`)
+
+| Table | Purpose |
+|---|---|
+| `drafts` | At most one row per question (`question_id UNIQUE`): the text being typed (stem, options A–E, correct letter, explanation, optional note), `base_revision_id` and `base_lock_version` it was started from, `reviewer_name`, `write_count`, `created_at`, `saved_at`. |
+| `draft_discards` | Append-only archive (update/delete trigger-protected) of drafts a reviewer *chose* to throw away, with who, when and why (`DISCARDED` / `REVERTED`). |
+
+* Drafts are **working copies**. Nothing in the draft code path writes to `questions`,
+  `question_revisions` or `review_events`; a draft cannot change a status, a timestamp, a
+  lock version or any saved text. Revisions stay append-only and the original imported
+  content immutable (§5.2).
+* Unlike a revision, draft text may be incomplete (an answer still empty while typing), so
+  its columns are not required to be non-empty; the CHECKs that remain are the valid
+  correct letter and a non-blank reviewer name.
+* Triggers force `base_revision_id` to belong to the same question; every foreign-key
+  column is indexed (tested for every table).
 
 ## 6. Performance at 10,000 records (measured)
 
@@ -234,6 +253,20 @@ Medians of repeated runs; two complete runs agreed within ≈15 %.
 Query-plan tests assert index-ordered listing without a temporary sort, primary-key-only
 lookups for a page and for a detail, and that a page of 100 rows costs exactly one
 `SELECT` and reads no revision history (no N+1 pattern).
+
+### Phase 4 — editing in the 10,000-question catalog (measured)
+
+`tests/test_editing_performance.py`, the same synthetic 10,000 questions, offscreen Qt,
+`synchronous=FULL` on the editing connections (tmpfs-class disk, so `fsync` is cheap here —
+a spinning or network disk will be slower).
+
+| Operation | Measured | Test budget |
+|---|---:|---:|
+| Open the editor on a question deep in the catalog (detail read + draft lookup + widgets) | 4–7 ms | < 500 ms |
+| One draft write (own connection, one transaction) | 2.4–2.8 ms | < 200 ms |
+| Explicit save incl. list refresh and detail reload (GUI) | 55–64 ms | < 500 ms |
+| 300 drafts: list all · ids only · refresh markers/banner · open the list dialog | 1.9 · 0.5 · 1.2 · 27 ms | < 1 s · 100 · 500 · 2000 ms |
+| Worst event-loop gap while typing 60 changes of a 4,000-character stem with autosave running | 30 ms | < 400 ms |
 
 ## 7. Question import and validation (implemented)
 
@@ -338,7 +371,7 @@ a folder → validation summary and issue table (errors first) → confirmation
 dialog → result (created, skipped, backup path, batch number). The sidebar and
 home page then show real per-subject and per-status counts.
 
-## 8. Editorial revision history (design)
+## 8. Editorial revision history (implemented — Phase 4; restore deferred)
 
 * Revisions are append-only; `questions.current_revision_id` points to the
   latest. Saving content identical to the current revision creates nothing.
@@ -350,9 +383,13 @@ home page then show real per-subject and per-status counts.
   asked to reload — no silent lost update.
 * Every revision stores `author` (the reviewer name set for this installation —
   there is no login) and an optional note.
-* History view: list of revisions with word-level diff between any two.
+* History view (implemented, `ui/revision_history_view.py`): read-only list of revisions
+  (number, editor, time, origin, note, status change) with the full text of the selected
+  one and a word-level comparison with the current version (`domain/textdiff.py`). Restoring
+  an old revision stays deferred to a later phase; the format above is what it will use.
+* The save itself is §17.4.
 
-## 9. Approval states (design)
+## 9. Approval states (edit transitions implemented — Phase 4; approve/reject/reopen design)
 
 Status codes and Georgian labels match the VascQBank-Review web application
 (implemented in `domain.review_status`).
@@ -368,6 +405,16 @@ Status codes and Georgian labels match the VascQBank-Review web application
 Every transition writes a `review_events` row in the same transaction. Exports
 read `approved_revision_id`, so only the exact approved text can ever be
 exported.
+
+**Implemented in Phase 4** (`domain.review_status.status_after_edit`): saving an edit moves
+`PENDING_REVIEW → IN_REVIEW`, keeps `IN_REVIEW`, keeps `REJECTED` (leaving it is the explicit
+*reopen* of a later phase) and moves `APPROVED → IN_REVIEW`. The last one **revokes the
+approval**: the `questions` CHECK requires `approved_revision_id` and `approved_at` to be NULL
+unless the status is `APPROVED`, so both are cleared — the approved revision itself and its
+`APPROVE` event stay in the history, and the revoked revision number is written into the
+`EDITED` event's note. The editor warns before this happens and asks for confirmation.
+*Typing never changes a status*: only the committed save does. Approve, reject and reopen
+are not implemented yet.
 
 ## 10. Local backup and recovery
 
@@ -468,7 +515,11 @@ connections → atomic replace → remove stale `-wal`/`-shm` → reopen and mig
 | Catalog, search (FTS5 + LIKE parity), session, settings, backups services | pytest, synthetic data (`tests/bank.py` seeds through the real repository) | implemented |
 | Catalog page, detail rendering, main-window integration, session restore | pytest-qt, offscreen | implemented |
 | 10,000-question browse/search benchmark, query plans, memory | `perf` marker | implemented |
-| Revision/approval services, round-trip export | pytest | later phases |
+| Edit service: every field, Unicode, status rules, conflicts, rollback, disk-full, locks, threads | pytest with temp databases | implemented |
+| Crash recovery: SIGKILL at exact SQL statements; whole GUI killed mid-edit | isolated child processes, temp databases only | implemented |
+| Autosaver (single flight, stale answers, flush, retry, close) · editor, history, drafts, main window | pytest-qt, offscreen | implemented |
+| Editing in a 10,000-question catalog | `perf` marker | implemented |
+| Approval services, round-trip export | pytest | later phases |
 | Packaged builds | CI smoke run of the EXE/AppImage | packaging phase |
 
 Offscreen GUI tests verify widget structure and wiring; they are not a
@@ -625,26 +676,200 @@ forward-only migrations on the user's database, not by re-copying the seed.
 **Invariants.** The application never generates or invents questions; the seed holds only
 what the 12 source files hold; `original_content_json` keeps the seed's content immutable.
 
-## 17. Extension points for Phase 4 (editor, autosave, crash-safe drafts)
+## 17. Editor, autosave and crash recovery (implemented — Phase 4)
 
-* **Writes** belong in a new `services/edit_service.py`: append a revision, move
-  `current_revision_id`, bump `lock_version` (optimistic concurrency, §8), write the
-  `review_events` row and the status transition in **one** `BEGIN IMMEDIATE` transaction,
-  stamping `ReviewerProfile.require_name()` as author/actor. `tests/bank.py::simulate_edit`
-  and `set_status` perform exactly these writes and show the invariants the triggers enforce.
-* **Search** needs no change: the index detects new revisions (§15.2); call
-  `CatalogService.ensure_search_index()` on a background thread after a save if the next
-  search must not pay for the reconcile.
-* **Drafts / autosave**: keep unsaved text out of `question_revisions` (append-only) — a new
-  migration (version 3) for a `drafts` table keyed by question id, written in short
-  transactions, or a draft file per question next to `settings.json`. `QuestionDetailView`
-  is read-only by design; build the editor as a separate widget (or an edit mode) and reuse
-  `OptionRow` for the display state.
-* **UI hooks**: `CatalogView.open_question()` is the single place a question is shown;
-  `contextChanged` already feeds session saving; `CatalogView.refresh()` re-runs the current
-  filter after a status change, and `CatalogService.nearest_id()` plus
-  `ResultSet.next_id()` give the "move on to the next question" behaviour when the current
-  one leaves a filtered list.
-* **Invariants to keep**: no write from the catalog code paths (`query_only`), the layer rules
-  (UI imports no `db`), Georgian text preserved byte-exactly (`paragraphs_html` round-trip),
-  the unchanged-database snapshot tests.
+### 17.1 The editor
+
+The detail area of the catalog page is a `QStackedWidget` with three modes owned by
+`ui/catalog_editing.py::EditingController`: the read-only detail view (the default, unchanged),
+the **editor** (`ui/question_editor_view.py`) and the read-only **history** (§8). Opening a
+question never starts editing and never writes.
+
+* Fields: stem, answers ა–ე, the correct answer (one radio per answer; the chosen answer's card
+  is highlighted and the radios are exclusive — exactly one is always selected), explanation
+  and an optional short note that is stored with the review event.
+* Text fields are plain text (`ui/text_edit.py`): no rich-text paste, Enter makes a new line,
+  Tab moves to the next field, height grows with the content. Georgian text is stored exactly
+  as typed after the same normalisation as imported text (NFC, LF line ends); the outer
+  whitespace of a saved field is trimmed.
+* Keyboard: **Ctrl+E** edit · **Ctrl+S** save · **Esc** cancel · **Ctrl+1 … Ctrl+5** correct
+  answer ა … ე · **Ctrl+H** history · **Tab** next field.
+* The footer always shows one state, in Georgian: *no change · changing — draft will be saved
+  soon · draft saving · draft saved at HH:MM:SS · saving · saved as revision N · error (the
+  text is kept) · conflict*. "Saved" is shown only after the SQLite transaction has committed.
+* Editing an `APPROVED` question shows a warning at the top and asks for confirmation when the
+  reviewer saves (§9). Without a chosen reviewer name the editor does not open and the
+  reviewer page is shown instead (`ReviewerProfile.require_name()`).
+* **Cancel** with unsaved changes asks: keep the draft and leave · discard the changes ·
+  continue editing. **ტექსტის დაბრუნება** (revert) puts the saved text back after
+  confirmation, still in edit mode.
+
+### 17.2 Draft lifecycle
+
+```
+ typing ──(≈1 s pause)──▶ drafts row (UPSERT, one short transaction)        "draft saved"
+   │                           │
+   │  navigate / filter / subject / page / leave edit mode / close
+   │  ───────────▶ synchronous flush of the newest text first
+   │
+ Ctrl+S ─▶ validate ─▶ ONE transaction: new revision + questions row + review event
+                       + delete the draft only if it holds exactly the saved text
+ Cancel ─▶ keep (draft stays) │ discard (draft → draft_discards, then deleted) │ continue
+ leave with text equal to the saved text ─▶ the pointless draft is removed (drop_if_identical)
+```
+
+A draft is removed in exactly three ways, never implicitly: (a) the same transaction that
+commits a revision of **identical** text; (b) an explicit, confirmed discard, which first
+archives the text in the append-only `draft_discards`; (c) leaving the editor with text equal
+to the saved text (nothing is lost, there is nothing to keep). Filtering a question out of the
+list, switching subject, closing or restarting the program never deletes a draft. One draft
+exists per question and it stores the revision and `lock_version` it was started from, which is
+how a draft written on an older revision is recognised (§17.5).
+
+### 17.3 Autosave: guarantees and limits (`ui/autosave.py`, `services/draft_service.py`)
+
+Guarantees — each one has a test:
+
+* **"Saved" means committed.** The state changes to *draft saved* only after
+  `DraftService.save_draft` returned, i.e. after `COMMIT`. A pending or failed write keeps the
+  state at *changing* or *error*.
+* **No revision per keystroke.** Autosave only writes `drafts`; revisions are created by an
+  explicit save.
+* **One write at a time, newest text wins.** A single background write is in flight; edits made
+  meanwhile are coalesced into one follow-up write of the newest text. All draft writes also pass
+  through one lock in `DraftService`, and **every call opens its own SQLite connection** — no
+  connection is shared between threads.
+* **Immediate persistence when the context changes.** Navigating to another question, the
+  previous/next buttons, jumping to an ID, changing subject/status/sort/search, leaving the
+  page, leaving edit mode and closing the window all call a *synchronous flush*: it waits for
+  the write in flight, then writes the newest pending text on the calling thread and reports
+  whether it is confirmed. A termination request from the operating system (`SIGTERM`,
+  `SIGINT`, `SIGHUP`: `kill`, a systemd stop, a closing terminal) closes the window through the
+  same path (`app/main.py::install_signal_shutdown`); `SIGKILL` and power loss cannot be caught.
+* **Failure never discards text.** If a write fails (disk full, database locked or read-only,
+  I/O error) the text stays in the editor, the footer shows a Georgian error explaining the
+  cause and that the text is kept, and the write is retried every few seconds. A flush that
+  cannot be confirmed makes the application ask before navigating away or closing; the default
+  answer keeps the text, and the window stays open.
+* **Stale answers are ignored.** Every snapshot has a session id and a sequence number; the
+  outcome of a write that belongs to an earlier editing session, or to text that has since been
+  replaced, cannot change the state of the current one.
+* **Durable commits.** The editing connections use `synchronous=FULL` (§4.1) so a committed
+  draft or revision also survives a power cut, not only a crash of the program.
+
+Limits — stated plainly:
+
+* Text typed during the last pause (≈1 s) and the write itself exists only in memory. If the
+  program is killed, or the computer loses power, in that window **those last keystrokes are
+  lost**; what is on disk is then exactly the previous confirmed draft (tested by killing a
+  child process in the middle of a write). Only the whole editing window being closed
+  normally, or a context change, flushes immediately.
+* If the writer cannot ever succeed (disk full, read-only disk) the text stays only in memory
+  until space is available; the application says so and refuses to close silently.
+* Nothing protects against physical disk failure, file-system corruption or deleting the data
+  folder; backups (§10) are the protection for that and are the reviewer's responsibility.
+  The application does not promise zero data loss under hardware failure.
+
+### 17.4 The authoritative save (`services/edit_service.py`, `db/edit_repository.py`)
+
+`EditService.save(question_id, expected_lock_version, content, note)`:
+
+1. validate (`domain/editing.validate_content`: no empty field, no control characters, ≤ 20,000
+   characters per field, note ≤ 500) and require the reviewer name — nothing is opened or
+   written if either fails;
+2. one `BEGIN IMMEDIATE` transaction:
+   1. read the question; **if `lock_version` differs from the one the editor loaded → rollback and
+      `EditConflict`** (no write happened);
+   2. if the normalised text equals the current revision → no revision, no event; an identical
+      draft is deleted in the same transaction;
+   3. insert the new `question_revisions` row (`origin = EDIT`, contiguous number, content hash);
+   4. update `questions`: `current_revision_id`, status per §9, `lock_version + 1`, `modified_at`
+      (guarded by `AND lock_version = ?`);
+   5. append the `EDITED` `review_events` row (actor = reviewer; the note, the revoked approval
+      and a conscious rebase are recorded in it);
+   6. delete the draft **only if** it holds the text just saved;
+   7. `COMMIT`; any exception → `ROLLBACK`, so either all of 3–6 happened or none.
+3. errors become `EditConflict`, `ValidationFailed`, `ReviewerRequired`, `EditTargetMissing` or
+   `StorageFailure` (disk full / locked / read-only / I/O), each with a Georgian message in the UI.
+
+On a conflict (the question was saved from another window or instance after the editor loaded
+it) the editor keeps the typed text and offers: *compare with the new version* · *keep as a
+draft and load the new version* · *save my text as a new revision on top* (the other revision
+stays in the history and the event records `rebased_from`). Nothing is overwritten silently.
+The same check protects a draft recovered after the question changed.
+
+### 17.5 Crash recovery procedure
+
+There is no special "recovery mode": a draft is ordinary committed data, so after any
+interruption — crash, kill, power loss, a failed update — the next start simply finds it.
+
+1. Startup runs the migrations (an automatic backup is taken first when one is applied) and
+   restores the previous subject, filter, **last opened question** and the reviewer name
+   (§15.5). Nothing is edited or restored automatically.
+2. If any drafts exist, the catalog shows a banner *დაუსრულებელი მონახაზი: N* with *მონახაზების
+   ნახვა*, the status bar and the home page show the count, and each draft's row in the list is
+   marked *✎ მონახაზი*.
+3. When the question that was open is shown, a bar above it says that it has an unfinished draft
+   (who, when) and offers **აღდგენა რედაქტორში** (restore into the editor), **შედარება**
+   (compare with the saved text) and **გაუქმება** (discard, with confirmation; the text is
+   archived). A draft based on an older revision says so (*დაფუძნებულია ძველ რედაქციაზე
+   (1 → 2)*); restoring it never overwrites the newer saved text — saving it hits the conflict
+   path of §17.4.
+4. The draft list (menu or banner) shows every draft — question, reviewer, time, outdated
+   flag — and can open, compare or discard each. A draft is never deleted because its
+   question is filtered out, because another question was opened, or because the program was
+   restarted.
+
+Verified by tests that kill (`SIGKILL`) *isolated child processes working on temporary
+databases* — at an exact SQL statement of a draft write, of a save and of a discard, and the
+entire GUI while a draft is confirmed, while typing is unconfirmed and in the middle of a
+draft write — and then reopen the database: it is sound (`integrity_check`, `foreign_key_check`),
+holds exactly the last committed state and offers the draft. No test or tool terminates a
+process that holds real data.
+
+### 17.6 Threading review (`ui/workers.py`, `ui/autosave.py`)
+
+Reviewed again after the heap corruption of Phase 3 (§15.3):
+
+* A `BackgroundJob`/`QRunnable` is kept in a module-level set until its run has finished, so
+  Qt's pool never holds a pointer to a collected object; results return as queued signals of
+  a UI-thread `QObject`.
+* A job whose creator did not connect `failed` still logs the original traceback
+  (`log.exception`) — threading errors are not suppressed.
+* The autosaver is a child of the editor; late results for a closed or destroyed autosaver
+  are ignored, and the synchronous flush reads the outcome from a per-write ticket instead of
+  from a queued signal (so shutdown never depends on the event loop).
+* Services open a connection per call; the draft write lock serialises draft writes; the
+  catalog (search) runs on its own latest-only runner, unchanged.
+* Test coverage: a page deleted while a draft write is still inside the database call, a
+  window closed while a slow write runs, stale outcomes after switching questions, failing
+  writes, and repeated runs of the whole GUI test set (results in the Phase 4 report).
+
+### 17.7 Data-loss risks and protections
+
+| Risk | Protection | Remaining exposure |
+|---|---|---|
+| Program killed / crashes while typing | autosave ≈1 s; flush on every context change | last ≈1 s of keystrokes |
+| Power cut | `synchronous=FULL` on draft and edit commits; WAL recovery on next open | last ≈1 s of keystrokes |
+| Save fails half-way | single `BEGIN IMMEDIATE` transaction, rollback; draft kept until commit | none (tested with injected failures and a real disk-full) |
+| Two windows/instances edit the same question | optimistic `lock_version`; conflict dialog | none silently; the reviewer decides |
+| Draft written for an older revision | stores base revision and lock; flagged *outdated*; saving it conflicts | none silently |
+| Mistaken discard | confirmation; text archived in append-only `draft_discards` | recoverable by hand from the database |
+| Mistaken edit | every revision is kept; history view shows and compares them | restoring is by copying text until the restore feature exists |
+| Disk full / read-only / locked | Georgian error, text kept, retry, refuse to close silently | text only in memory while writing is impossible |
+| Disk failure, corruption, deleted folder | verified backups (§10) | the application cannot prevent this |
+
+## 18. Extension points for Phase 5 (approval, rejection, reopening, restore)
+
+* **Approval** is a new `services/review_service.py` using the same transaction pattern as
+  §17.4: check `lock_version`, set status and `approved_revision_id`/`approved_at`, append the
+  `APPROVE`/`REJECT`/`REOPEN` event, bump `lock_version`, commit. `tests/bank.py::approve` and
+  `set_status` show the exact writes and the invariants the triggers enforce. Content must pass
+  `validate_content` before approval; unresolved drafts of the question should be shown first.
+* **Restore of an old revision** creates a new revision with `origin = RESTORE` (§8) through the
+  same `edit_repository.append_edit`; the history view already lists and compares revisions.
+* **Export** reads `approved_revision_id` only (§9); drafts and `IN_REVIEW` text never reach it.
+* **Search** needs no change: the derived index detects new revisions (§15.2).
+* **Invariants to keep**: catalog code paths stay `query_only`; the UI never imports `db`;
+  Georgian text is preserved exactly; every write is a single transaction; "saved" is shown only
+  after the commit; drafts are never deleted implicitly; the unchanged-database snapshot tests.

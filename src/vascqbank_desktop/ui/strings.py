@@ -271,7 +271,10 @@ DET_APPROVED_AT: Final = "დამტკიცდა"
 DET_REVISION_FIELD: Final = "მიმდინარე რედაქცია"
 DET_KIND_PAIRED: Final = "TXT წყვილი (კითხვები + განმარტებები)"
 DET_KIND_MASTER: Final = "რაფინირებული მასტერი"
-DET_READ_ONLY: Final = "ნახვის რეჟიმი: კითხვის რედაქტირება და დამტკიცება შემდეგ ეტაპზე დაემატება."
+DET_READ_ONLY: Final = (
+    "ნახვის რეჟიმი. შესასწორებლად დააჭირეთ „რედაქტირება“-ს (Ctrl+E); "
+    "დამტკიცების ფუნქცია შემდეგ ეტაპზე დაემატება."
+)
 DET_COPY: Final = "კითხვის კოპირება"
 DET_COPIED: Final = "დაკოპირდა"
 DET_COPY_CORRECT: Final = "სწორი პასუხი: {letter}"
@@ -341,3 +344,156 @@ REV_ERR_TOO_LONG: Final = "სახელი ძალიან გრძელ
 REV_ERR_CHARACTERS: Final = "სახელი შეიცავს დაუშვებელ სიმბოლოებს."
 REV_ERR_SAVE: Final = "სახელის შენახვა ვერ მოხერხდა: {detail}"
 REV_NAME_PLACEHOLDER: Final = "აირჩიეთ სიიდან ან ჩაწერეთ სახელი"
+
+
+# Editing (Phase 4)
+ACTION_EDIT: Final = "რედაქტირება"
+ACTION_HISTORY: Final = "ცვლილებების ისტორია"
+ACTION_DRAFTS: Final = "მონახაზები…"
+EDIT_BUTTON: Final = "✎ რედაქტირება"
+EDIT_BUTTON_TOOLTIP: Final = "კითხვის რედაქტირება (Ctrl+E). ცვლილებები ავტომატურად ინახება მონახაზად."
+HISTORY_BUTTON: Final = "ისტორია"
+HISTORY_BUTTON_TOOLTIP: Final = "ცვლილებების ისტორია (Ctrl+H) — ხელმისაწვდომია რედაქტირების გარეთ"
+STATUS_DRAFTS: Final = "მონახაზები: {count}"
+ED_NEED_REVIEWER: Final = "რედაქტირებამდე აირჩიეთ რეცენზენტი („რეცენზენტი“ გვერდზე)."
+ED_NOT_AVAILABLE: Final = "რედაქტირება ამ ფანჯარაში ხელმისაწვდომი არ არის."
+
+ED_SECTION_STEM: Final = "კითხვა"
+ED_SECTION_OPTIONS: Final = "პასუხის ვარიანტები — აირჩიეთ სწორი პასუხი (Ctrl+1 … Ctrl+5)"
+ED_SECTION_EXPLANATION: Final = "განმარტება"
+ED_SECTION_NOTE: Final = "შენიშვნა ცვლილებაზე (არასავალდებულო)"
+ED_NOTE_PLACEHOLDER: Final = "მაგ.: შესწორდა ტერმინოლოგია"
+ED_SAVE: Final = "შენახვა (Ctrl+S)"
+ED_CANCEL: Final = "გაუქმება (Esc)"
+ED_REVERT: Final = "ტექსტის დაბრუნება"
+ED_REVERT_TOOLTIP: Final = "ველებს დაუბრუნებს კითხვის შენახულ ვერსიას"
+ED_FIELD_STEM: Final = "კითხვა"
+ED_FIELD_OPTION: Final = "პასუხი {letter}"
+ED_FIELD_EXPLANATION: Final = "განმარტება"
+ED_FIELD_NOTE: Final = "შენიშვნა"
+
+ED_STATE_CLEAN: Final = "ცვლილება არ არის"
+ED_STATE_UNSAVED: Final = "მიმდინარეობს ცვლილება — მონახაზი მალე შეინახება…"
+ED_STATE_SAVING_DRAFT: Final = "მონახაზი ინახება…"
+ED_STATE_DRAFT_SAVED: Final = "მონახაზი შენახულია {time} · რედაქციად ჯერ არ არის შენახული"
+ED_STATE_SAVING: Final = "ინახება…"
+ED_STATE_SAVED: Final = "✓ შენახულია — რედაქცია {number}"
+ED_STATE_UNCHANGED: Final = "ცვლილება არ არის — ახალი რედაქცია არ შექმნილა"
+ED_STATE_ERROR: Final = "✗ ვერ შეინახა: {detail}"
+ED_STATE_CONFLICT: Final = "✗ კითხვა სხვაგან შეიცვალა — აირჩიეთ, როგორ გააგრძელოთ"
+
+ED_APPROVED_WARNING: Final = (
+    "ეს კითხვა დამტკიცებულია. ახალი რედაქციის შენახვა გააუქმებს დამტკიცებას და სტატუსს "
+    "შეცვლის „განხილვის პროცესში“-ზე. მონახაზის წერა სტატუსს არ ცვლის."
+)
+ED_CONFIRM_REVOKE_TITLE: Final = "დამტკიცების გაუქმება"
+ED_CONFIRM_REVOKE_TEXT: Final = (
+    "კითხვა დამტკიცებულია (რედაქცია {number}). ცვლილების შენახვა შექმნის ახალ რედაქციას, "
+    "გააუქმებს დამტკიცებას და სტატუსს შეცვლის „განხილვის პროცესში“-ზე. გავაგრძელოთ?"
+)
+ED_DRAFT_RESTORED: Final = (
+    "აღდგენილია დაუსრულებელი მონახაზი ({reviewer}, {time}). ის კითხვაში ჩაწერილი არ არის, "
+    "სანამ რედაქციად არ შეინახავთ."
+)
+ED_DRAFT_OUTDATED: Final = (
+    "ეს მონახაზი დაფუძნებულია რედაქცია {base}-ზე, კითხვის მიმდინარე რედაქცია კი {current}-ია. "
+    "შენახვისას კონფლიქტი გამოჩნდება — არაფერი გადაიწერება ჩუმად."
+)
+ED_CONFLICT_TEXT: Final = (
+    "კითხვა სხვა ადგილას შეიცვალა: მისი მიმდინარე რედაქცია ახლა {current}-ია. თქვენი ტექსტი "
+    "არ დაკარგულა — ის მონახაზად ინახება."
+)
+ED_CONFLICT_MINE: Final = "ჩემი ტექსტის შენახვა ახალ რედაქციად"
+ED_CONFLICT_MINE_TOOLTIP: Final = (
+    "არსებული ახალი რედაქცია ისტორიაში დარჩება; თქვენი ტექსტი მის შემდეგ ახალ რედაქციად ჩაიწერება"
+)
+ED_CONFLICT_COMPARE: Final = "ახალ ვერსიასთან შედარება"
+ED_CONFLICT_KEEP: Final = "მონახაზად დატოვება და ახალი ვერსიის ჩატვირთვა"
+ED_VALIDATION_INTRO: Final = "შენახვამდე შეასწორეთ:"
+ED_PROBLEM_EMPTY: Final = "{field} — ველი ცარიელია"
+ED_PROBLEM_CONTROL: Final = "{field} — შეიცავს დაუშვებელ სიმბოლოებს"
+ED_PROBLEM_TOO_LONG: Final = "{field} — ძალიან გრძელია (მაქსიმუმ {max} სიმბოლო)"
+ED_PROBLEM_NOTE_TOO_LONG: Final = "შენიშვნა ძალიან გრძელია (მაქსიმუმ {max} სიმბოლო)"
+ED_STORAGE_DISK_FULL: Final = "დისკზე ადგილი არ არის"
+ED_STORAGE_LOCKED: Final = "მონაცემთა ბაზა სხვა პროგრამას ან ფანჯარას უკავია"
+ED_STORAGE_READ_ONLY: Final = "მონაცემთა ბაზა მხოლოდ საკითხავია"
+ED_STORAGE_IO: Final = "დისკის წაკითხვის/ჩაწერის შეცდომა"
+ED_STORAGE_OTHER: Final = "ჩაწერა ვერ მოხერხდა"
+ED_STORAGE_RETAINED: Final = " ტექსტი რედაქტორშია დარჩენილი და ჩაწერა ავტომატურად განმეორდება."
+ED_TARGET_MISSING: Final = "კითხვა ბაზაში აღარ მოიძებნა."
+ED_CANCEL_TITLE: Final = "რედაქტირების გაუქმება"
+ED_CANCEL_TEXT: Final = "კითხვაში შეუნახავი ცვლილებებია. რა გავაკეთოთ?"
+ED_CANCEL_KEEP: Final = "მონახაზის დატოვება და გასვლა"
+ED_CANCEL_DISCARD: Final = "ცვლილებების გადაგდება"
+ED_CANCEL_CONTINUE: Final = "რედაქტირების გაგრძელება"
+ED_REVERT_TITLE: Final = "ტექსტის დაბრუნება"
+ED_REVERT_TEXT: Final = (
+    "ველებს დაუბრუნდება კითხვის შენახული ვერსია, ჩაწერილი ცვლილებები გაქრება. გავაგრძელოთ?"
+)
+ED_FLUSH_FAILED_TITLE: Final = "მონახაზი ვერ შეინახა"
+ED_FLUSH_FAILED_TEXT: Final = (
+    "თქვენი ბოლო ცვლილებები ვერ ჩაიწერა ({detail}). თუ გააგრძელებთ, ეს ტექსტი დაიკარგება. "
+    "გავაგრძელოთ მაინც?"
+)
+ED_CLOSE_FAILED_TEXT: Final = (
+    "თქვენი ბოლო ცვლილებები ვერ ჩაიწერა ({detail}). თუ პროგრამას ახლა დახურავთ, ეს ტექსტი "
+    "დაიკარგება. დავხუროთ მაინც?"
+)
+
+# Drafts and recovery
+DR_BAR_TEXT: Final = "ამ კითხვას აქვს დაუსრულებელი მონახაზი — {reviewer}, {time}."
+DR_BAR_OUTDATED: Final = " დაფუძნებულია ძველ რედაქციაზე ({base} → {current})."
+DR_RESTORE: Final = "აღდგენა რედაქტორში"
+DR_COMPARE: Final = "შედარება"
+DR_DISCARD: Final = "მონახაზის გაუქმება"
+DR_DISCARD_TITLE: Final = "მონახაზის გაუქმება"
+DR_DISCARD_TEXT: Final = (
+    "მონახაზი ({uid}) წაიშლება. მისი ტექსტი მაინც შეინახება ბაზის დაცულ არქივში. გავაგრძელოთ?"
+)
+DR_BANNER: Final = "დაუსრულებელი მონახაზი: {count}"
+DR_BANNER_BUTTON: Final = "მონახაზების ნახვა"
+DR_LIST_TITLE: Final = "დაუსრულებელი მონახაზები"
+DR_LIST_INTRO: Final = (
+    "აქ ჩანს ყველა შეუნახავი მონახაზი, მათ შორის წინა სესიებისა. მონახაზი არასდროს იშლება "
+    "თავისით — მხოლოდ თქვენი არჩევით."
+)
+DR_LIST_EMPTY: Final = "დაუსრულებელი მონახაზები არ არის."
+DR_COL_QUESTION: Final = "კითხვა"
+DR_COL_SUBJECT: Final = "თემა"
+DR_COL_REVIEWER: Final = "რეცენზენტი"
+DR_COL_SAVED: Final = "ბოლო ჩაწერა"
+DR_COL_STATE: Final = "მდგომარეობა"
+DR_STATE_CURRENT: Final = "მიმდინარე რედაქციაზე"
+DR_STATE_OUTDATED: Final = "ძველ რედაქციაზე ({base} → {current})"
+DR_OPEN: Final = "გახსნა რედაქტორში"
+DR_CLOSE: Final = "დახურვა"
+
+# History
+HI_TITLE: Final = "ცვლილებების ისტორია"
+HI_BACK: Final = "← კითხვაზე დაბრუნება"
+HI_ROW: Final = "რედაქცია {number} · {author} · {time}"
+HI_CURRENT: Final = "მიმდინარე"
+HI_ORIGIN_IMPORT: Final = "იმპორტი"
+HI_ORIGIN_EDIT: Final = "რედაქტირება"
+HI_ORIGIN_RESTORE: Final = "აღდგენა"
+HI_APPROVED_MARK: Final = "დამტკიცებული იყო"
+HI_META_AUTHOR: Final = "რედაქტორი"
+HI_META_TIME: Final = "დრო"
+HI_META_NOTE: Final = "შენიშვნა"
+HI_META_STATUS: Final = "სტატუსი"
+HI_META_ORIGIN: Final = "სახეობა"
+HI_NO_NOTE: Final = "—"
+HI_STATUS_CHANGE: Final = "{before} → {after}"
+HI_SHOW_DIFF: Final = "შედარება მიმდინარე ვერსიასთან"
+HI_SAME_AS_CURRENT: Final = "ეს მიმდინარე რედაქციაა"
+HI_NO_DIFFERENCES: Final = "ტექსტი მიმდინარე ვერსიას ემთხვევა"
+HI_READ_ONLY: Final = (
+    "ისტორია მხოლოდ საკითხავია: რედაქციები არასდროს იცვლება. ძველი რედაქციის აღდგენა "
+    "მომდევნო ეტაპზე დაემატება."
+)
+DIFF_LEGEND: Final = "წაშლილი ტექსტი · დამატებული ტექსტი"
+DIFF_UNCHANGED_FIELDS: Final = "უცვლელი ველები: {fields}"
+DIFF_OLD_TITLE: Final = "{title} (ძველი)"
+DIFF_COMPARE_TITLE: Final = "ვერსიების შედარება"
+DIFF_FIELD_CORRECT: Final = "სწორი პასუხი"
+DR_MARKER: Final = "მონახაზი"

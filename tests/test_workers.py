@@ -178,3 +178,19 @@ def test_shutdown_waits_for_the_running_call_and_drops_the_rest(qtbot, styled_qa
     runner.submit(lambda: "late", delivered.append)  # a closed runner ignores new work
     qtbot.wait(50)
     assert delivered == [] and not runner.is_busy()
+
+
+def test_a_failing_job_leaves_a_traceback_in_the_log_even_if_nobody_listens(
+    qtbot, styled_qapp, caplog
+) -> None:
+    """Threading errors must not vanish: a job with no `failed` handler still gets logged."""
+    import logging
+
+    job = BackgroundJob(lambda: 1 / 0)
+    with caplog.at_level(logging.ERROR, logger="vascqbank_desktop.ui.workers"):
+        job.start()
+        job.wait(WAIT_MS)
+        qtbot.wait(50)
+    records = [r for r in caplog.records if "Background call failed" in r.getMessage()]
+    assert records and records[0].exc_info is not None
+    assert records[0].exc_info[0] is ZeroDivisionError  # the original traceback, not just a message

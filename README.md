@@ -12,13 +12,15 @@ and TXT files**.
 * The application **never generates questions**; it only works with imported ones.
 * The user interface is Georgian; code and technical documentation are English.
 
-> **Status: Phase 3 of 10 — question browser, search, reviewer profile and
-> session persistence.** Working: importing questions (Phase 2), browsing all
-> 12 subjects, a read-only question detail view with the correct answer
-> highlighted, full-text search (SQLite FTS5 trigram with a LIKE fallback),
-> review-progress statistics, a local reviewer profile, return-to-where-you-stopped
-> on the next start, and manual verified backups. Editing, approval and export
-> arrive in later phases (see [ARCHITECTURE.md](ARCHITECTURE.md)).
+> **Status: Phase 4 of 10 — professional question editor, autosave and crash
+> recovery.** Working: importing questions (Phase 2); browsing all 12 subjects,
+> full-text search, progress statistics, a local reviewer profile, session restore
+> and verified backups (Phase 3); and now **editing every part of a question**
+> (question, answers ა–ე, correct answer, explanation) with **autosaved drafts**,
+> an explicit **Ctrl+S** save that creates a new revision, **conflict detection**,
+> a **read-only revision history** with comparison, and **recovery of unfinished
+> drafts after a crash**. Approval, rejection and export arrive in later phases
+> (see [ARCHITECTURE.md](ARCHITECTURE.md)).
 
 ---
 
@@ -107,8 +109,8 @@ question ID — see ARCHITECTURE.md §7.1.
 * **Detail view**: ID, Georgian subject, full question, the five options ა–ე with
   the correct one highlighted (colour *and* the words „სწორი პასუხი“), full
   explanation, status, current revision number, source file/line, import time and
-  last-modified time. Text can be selected and copied; there are no edit or
-  approval controls yet. Opening a question never changes anything in the database.
+  last-modified time. Text can be selected and copied. Opening a question never
+  changes anything in the database; editing starts only when you press *რედაქტირება*.
 * **Navigation**: *← წინა* / *შემდეგი →* (Alt+←/→), and *გადასვლა* (Ctrl+G) for an ID such as
   `ALI-0042` or a bare number inside the open subject.
 * **Search** (Ctrl+F): works on Georgian word fragments across question text,
@@ -127,14 +129,56 @@ question ID — see ARCHITECTURE.md §7.1.
   filter, the nearest following one is shown with an explanation.
 * **Backups** (*სარეზერვო ასლები*): create a verified backup now, see every backup with
   its time, type, size and verification result. Restoring is deliberately not
-  offered yet.
+  offered yet. Take one before a long editing session.
 
 ### Screenshots
 
 Rendered from the real window with **synthetic** data (10,000 artificial questions) by
-`tools/capture_screenshots.py`; see [docs/screenshots/phase3](docs/screenshots/phase3):
-home dashboard, catalog with the correct answer highlighted, search results with highlighted
-previews, a filtered subject after a jump, backups and the reviewer profile.
+`tools/capture_screenshots.py` and `tools/capture_screenshots_phase4.py`; see
+[docs/screenshots/phase3](docs/screenshots/phase3) and
+[docs/screenshots/phase4](docs/screenshots/phase4): home dashboard, catalog with the correct
+answer highlighted, search results, backups, the reviewer profile, and (Phase 4) the editor,
+validation, the approved-question warning, a conflict, draft recovery, the draft list and the
+revision history with a comparison.
+
+## Editing, drafts and crash recovery (Phase 4)
+
+Choose a reviewer name first (*რეცენზენტი*); editing is attributed to it. Then open a question
+and press **რედაქტირება** (Ctrl+E).
+
+| Key | Action |
+|---|---|
+| Ctrl+E | edit the open question |
+| Ctrl+S | save as a new revision |
+| Esc | leave edit mode (asks what to do with unsaved changes) |
+| Ctrl+1 … Ctrl+5 | mark answer ა … ე as the correct one |
+| Tab | next field (never inserts a tab character) |
+| Ctrl+H | revision history of the open question |
+
+* **Fields**: question, five answers, exactly one correct answer (highlighted), explanation and an
+  optional note. Plain text, multi-line, Georgian Unicode stored exactly as typed.
+* **Footer state**: *no change · changing · draft saving · draft saved HH:MM:SS · saving · saved as
+  revision N · error · conflict*. "Saved" always means the database transaction has committed.
+* **Autosave**: about one second after you stop typing the text is written as a **draft** — kept
+  apart from the revision history, never a new revision, never a status change. Leaving the
+  question, switching subject, changing page, leaving edit mode and closing the window write
+  the draft immediately. If a write fails (disk full, locked database) the text stays on screen,
+  an error explains why, and the write is retried; the program asks before it would close.
+* **Saving** (Ctrl+S) validates the text and, in one transaction, adds a revision, moves the
+  current-revision pointer, updates the status (*pending → in review*; editing an **approved**
+  question revokes the approval after a confirmation) and records the event. Saving identical
+  text creates nothing. If the question was changed elsewhere meanwhile, you choose: compare,
+  keep your text as a draft, or save it on top (the other revision stays in the history).
+* **After a crash or power cut** the next start shows *დაუსრულებელი მონახაზი: N*, marks those
+  questions *✎ მონახაზი* in the list, and offers **აღდგენა რედაქტორში / შედარება / გაუქმება**
+  on the question that was open. Nothing is restored or deleted behind your back; drafts are
+  never removed because a question is filtered out. A deliberate discard is archived.
+* **History** (Ctrl+H): every revision with editor, time, note and status change, its full text and
+  a comparison with the current version. History is append-only; restoring an old revision
+  comes in a later phase.
+* **Limits**: the last second of typing before an abrupt stop can be lost (what is on disk is
+  then the previous confirmed draft); nothing protects against disk failure — keep backups
+  (*სარეზერვო ასლები*). Details: [ARCHITECTURE.md §17](ARCHITECTURE.md).
 
 ## Tests
 
@@ -157,14 +201,14 @@ src/vascqbank_desktop/
 ├── app/           startup: arguments, logging, wiring
 ├── config/        constants and cross-platform paths
 ├── domain/        subjects, answer letters, statuses, question IDs, ImportedQuestion
-├── db/            SQLite policy, ownership check, migrations, schema, backups, repositories, search index
-├── services/      use cases: storage init, import, counts, catalog/search, settings, session, backups
+├── db/            SQLite policy, ownership check, migrations (schema v2, v3), backups, repositories, search index
+├── services/      use cases: storage init, import, counts, catalog/search, settings, session, backups, drafts, edits
 ├── validation/    text normalisation, issue catalogue (Georgian), content rules
 ├── importexport/  file discovery, paired-TXT and refined-master parsers, UTF-8 I/O
-├── ui/            PySide6 widgets: catalog, detail, backups, reviewer, import; strings, theme, workers
+├── ui/            PySide6 widgets: catalog, detail, editor, autosave, history, drafts, backups, reviewer, import; strings, theme, workers
 └── resources/     bundled fonts (Noto Sans, Noto Sans Georgian) and icon
-tools/             capture_screenshots.py — renders the real window with synthetic data
-tests/             pytest suite, incl. layer-boundary, offline and 10,000-question checks
+tools/             capture_screenshots*.py — render the real window with synthetic data
+tests/             pytest suite, incl. layer-boundary, offline, crash-recovery (isolated SIGKILL children on temporary databases) and 10,000-question checks
 ```
 
 ## Data protection

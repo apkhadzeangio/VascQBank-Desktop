@@ -9,7 +9,8 @@ program is rejected *before* any of the persistent settings below are applied.
 * ``foreign_keys=ON`` — referential integrity is enforced (off by default in SQLite).
 * ``journal_mode=WAL`` — readers never block the writer, and an interrupted
   write cannot corrupt committed data.
-* ``synchronous=NORMAL`` — the recommended durability level for WAL.
+* ``synchronous=NORMAL`` — the recommended durability level for WAL; the editing services
+  raise it to ``FULL`` for their own connections (:func:`make_durable`).
 * ``busy_timeout`` — brief lock contention waits instead of failing.
 
 SQLite stores text as UTF-8 (``PRAGMA encoding``), which is set before the
@@ -61,6 +62,19 @@ def open_database(path: str | os.PathLike[str]) -> sqlite3.Connection:
     except BaseException:
         conn.close()
         raise
+    return conn
+
+
+def make_durable(conn: sqlite3.Connection) -> sqlite3.Connection:
+    """Make this connection's commits survive a power cut (``synchronous=FULL``).
+
+    The default ``NORMAL`` level of WAL mode keeps a committed transaction through a crash of
+    the *program*, but the most recent commits may be lost if the *computer* loses power before
+    the log reaches the disk. Reviewer work (drafts and saved revisions) is worth the extra
+    ``fsync`` per commit, so the editing services call this on their own connections. The
+    setting is per connection, never stored in the file.
+    """
+    conn.execute("PRAGMA synchronous = FULL")
     return conn
 
 

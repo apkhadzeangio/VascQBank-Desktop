@@ -48,6 +48,8 @@ from vascqbank_desktop.services.catalog_service import CatalogService, QuestionN
 from vascqbank_desktop.services.question_stats import BankCounts, summarize
 from vascqbank_desktop.services.session_service import ContextNotice, RestoredContext
 from vascqbank_desktop.ui import strings
+from vascqbank_desktop.ui.autosave import DEFAULT_DELAY_MS, DEFAULT_RETRY_MS
+from vascqbank_desktop.ui.catalog_editing import EditingController, EditingServices
 from vascqbank_desktop.ui.formatting import format_count
 from vascqbank_desktop.ui.progress_panel import ProgressStrip
 from vascqbank_desktop.ui.question_delegate import QuestionDelegate
@@ -84,13 +86,31 @@ class CatalogView(QWidget):
     questionOpened = Signal(str)  # uid of the question now shown
     contextChanged = Signal(object, object, object)  # subject code, status, uid (each may be None)
     importRequested = Signal()
+    editingChanged = Signal(bool)  # edit mode entered / left
+    questionSaved = Signal(object)  # SaveResult: a revision was committed (or confirmed unchanged)
+    draftsChanged = Signal(int)  # number of unfinished drafts
+    reviewerRequired = Signal()  # the reviewer tried to edit without choosing a name
 
     def __init__(
-        self, service: CatalogService, subjects: Sequence[Subject], parent: QWidget | None = None
+        self,
+        service: CatalogService,
+        subjects: Sequence[Subject],
+        parent: QWidget | None = None,
+        *,
+        editing: EditingServices | None = None,
+        autosave_delay_ms: int = DEFAULT_DELAY_MS,
+        autosave_retry_ms: int = DEFAULT_RETRY_MS,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("ContentArea")
         self._service = service
+        self._editing: EditingController | None = (
+            EditingController(
+                self, editing, autosave_delay_ms=autosave_delay_ms, autosave_retry_ms=autosave_retry_ms
+            )
+            if editing is not None
+            else None
+        )
         self._subjects = {s.code: s for s in subjects}
         self._bank: BankCounts | None = None
         self._filter = CatalogFilter()
@@ -121,6 +141,8 @@ class CatalogView(QWidget):
         self.notice_label.setWordWrap(True)
         self.notice_label.hide()
         root.addWidget(self.notice_label)
+        if self._editing is not None:
+            root.addWidget(self._editing.banner)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
@@ -138,6 +160,8 @@ class CatalogView(QWidget):
         self._sync_controls()
         self._apply_filter()
         self._update_navigation()
+        if self._editing is not None:
+            self._editing.refresh_drafts_state()
 
     # ------------------------------------------------------------------ construction
     def _build_search_row(self) -> QHBoxLayout:
@@ -274,10 +298,27 @@ class CatalogView(QWidget):
         bar.addStretch(1)
         column.addLayout(bar)
         self.detail_view = QuestionDetailView()
-        column.addWidget(self.detail_view, 1)
+        self.mode_stack = QStackedWidget()  # read-only detail / editor / history
+        self.mode_stack.addWidget(self.detail_view)
+        column.addWidget(self.mode_stack, 1)
+        if self._editing is not None:
+            self._editing.install(bar, column, self.mode_stack)
         return panel
 
     # ------------------------------------------------------------------ public state
+    @property
+    def service(self) -> CatalogService:
+        return self._service
+
+    @property
+    def editing(self) -> EditingController | None:
+        """The editing behaviour, or ``None`` when this page was built without editing services."""
+        return self._editing
+
+    @property
+    def is_editing(self) -> bool:
+        return self._editing is not None and self._editing.mode.value == "EDIT"
+
     @property
     def current_filter(self) -> CatalogFilter:
         return self._filter
@@ -297,6 +338,45 @@ class CatalogView(QWidget):
     def shutdown(self) -> None:
         self._search_timer.stop()
         self._runner.shutdown()
+
+    def prepare_shutdown(self) -> bool:
+        """Persist the draft before the application closes; ``False`` means "do not close":
+        the draft could not be written and the reviewer chose to keep the text."""
+        return self._editing.prepare_shutdown() if self._editing is not None else True
+
+    def flush_editor_draft(self) -> bool:
+        """Write any pending draft now (filter and page changes); stays in edit mode."""
+        return self._editing.flush_draft() if self._editing is not None else True
+
+    def start_editing(self) -> bool:
+        return self._editing.start_editing() if self._editing is not None else False
+
+    def show_history(self) -> bool:
+        return self._editing.show_history() if self._editing is not None else False
+
+    def open_draft_list(self) -> None:
+        if self._editing is not None:
+            self._editing.open_draft_list()
+
+    def reload_current(self) -> None:
+        """Re-read the displayed question (after a save or leaving edit mode)."""
+        if self._current_id is None:
+            return
+        detail = self._service.detail(self._current_id)
+        if detail is not None:
+            self.detail_view.show_question(detail)
+        if self._editing is not None:
+            self._editing.refresh_draft_bar()
+
+    def after_saved(self, result: object) -> None:
+        """A revision was committed: refresh the list (status and preview may have changed)."""
+        self.refresh()
+        self.questionSaved.emit(result)
+
+    def show_question_by_location(self, location: QuestionLocation) -> bool:
+        """Show a question wherever it is (clearing filters if needed); ``False`` if blocked."""
+        self._jump_to(location)
+        return self._current_id == location.id
 
     def closeEvent(self, event) -> None:  # noqa: ANN001, N802
         self.shutdown()
@@ -368,6 +448,7 @@ class CatalogView(QWidget):
         self.search_edit.setText(text)
 
     def _change_filter(self, new_filter: CatalogFilter, *, announce: bool) -> None:
+        self.flush_editor_draft()  # switching subject / status / sort: persist pending text first
         self.clear_notice()
         self._search_timer.stop()  # typed-but-pending search text is applied together with the new filter
         self._filter = replace(new_filter, text=self.search_edit.text())
@@ -396,6 +477,7 @@ class CatalogView(QWidget):
         text = self.search_edit.text()
         if normalize_query(text) == normalize_query(self._filter.text):
             return
+        self.flush_editor_draft()
         self.clear_notice()
         self._filter = replace(self._filter, text=text)
         self._apply_filter()
@@ -490,10 +572,17 @@ class CatalogView(QWidget):
     def _on_list_current_changed(self, current: QModelIndex, _previous: QModelIndex) -> None:
         question_id = self.model.question_id_at(current.row()) if current.isValid() else None
         if question_id is not None and question_id != self._current_id:
-            self.open_question(question_id, scroll=False)
+            self.open_question(question_id, scroll=False)  # a refused move re-selects the open question
 
     def open_question(self, question_id: int, *, scroll: bool = True) -> bool:
-        """Show a question read-only. Never writes: no status or timestamp changes."""
+        """Show a question read-only. Never writes: no status or timestamp changes.
+
+        If the editor is open its draft is written first; when that fails and the reviewer
+        keeps the text, the question is *not* changed (returns ``False``).
+        """
+        if self._editing is not None and not self._editing.leave_for_navigation():
+            self._select_current_in_list(scroll=False)
+            return False
         try:
             detail = self._service.detail(question_id)
         except Exception as exc:
@@ -506,6 +595,9 @@ class CatalogView(QWidget):
         self.detail_view.show_question(detail)
         self._select_current_in_list(scroll=scroll)
         self._update_navigation()
+        if self._editing is not None:
+            self._editing.update_buttons()
+            self._editing.refresh_draft_bar()
         self.questionOpened.emit(detail.uid)
         self._emit_context()
         return True

@@ -6,6 +6,7 @@ from datetime import datetime
 
 from vascqbank_desktop.domain.answers import ANSWER_LETTERS
 from vascqbank_desktop.domain.catalog import QuestionDetail
+from vascqbank_desktop.domain.question import QuestionContent
 from vascqbank_desktop.ui import strings
 
 NBSP = " "
@@ -45,17 +46,31 @@ def format_timestamp(iso: str | None) -> str:
     return moment.astimezone().strftime("%Y-%m-%d %H:%M")
 
 
-def question_plain_text(detail: QuestionDetail) -> str:
-    """The whole question as plain text, for the clipboard."""
-    content = detail.content
+def content_plain_text(content: QuestionContent) -> str:
+    """Question, options ა–ე, the correct answer and the explanation as plain text."""
     options = [f"{letter}) {text}" for letter, text in zip(ANSWER_LETTERS, content.options, strict=True)]
     correct = strings.DET_COPY_CORRECT.format(letter=f"{content.correct.value}) {content.correct_text}")
     return "\n\n".join(
         [
-            f"{detail.uid} · {detail.subject_name_ka}",
             content.stem,
             "\n".join(options),
             correct,
             f"{strings.DET_COPY_EXPLANATION}\n{content.explanation}",
         ]
     )
+
+
+def question_plain_text(detail: QuestionDetail) -> str:
+    """The whole question as plain text, for the clipboard."""
+    return f"{detail.uid} · {detail.subject_name_ka}\n\n{content_plain_text(detail.content)}"
+
+
+def format_clock(iso: str | None) -> str:
+    """UTC ISO-8601 -> the computer's local time of day, ``21:20:05``."""
+    if not iso:
+        return "—"
+    try:
+        moment = datetime.fromisoformat(iso)
+    except ValueError:
+        return iso
+    return (moment.astimezone() if moment.tzinfo else moment).strftime("%H:%M:%S")

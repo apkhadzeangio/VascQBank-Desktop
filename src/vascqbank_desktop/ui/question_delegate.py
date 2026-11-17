@@ -102,10 +102,13 @@ class QuestionDelegate(QStyledItemDelegate):
         painter.drawLine(rect.bottomLeft(), rect.bottomRight())
 
         if summary is not None:
-            self._paint_summary(painter, option, rect, summary)
+            has_draft = summary.id in getattr(index.model(), "draft_ids", ())
+            self._paint_summary(painter, option, rect, summary, has_draft)
         painter.restore()
 
-    def _paint_summary(self, painter: QPainter, option: QStyleOptionViewItem, rect: QRect, summary) -> None:  # noqa: ANN001
+    def _paint_summary(
+        self, painter: QPainter, option: QStyleOptionViewItem, rect: QRect, summary, has_draft: bool  # noqa: ANN001
+    ) -> None:
         inner = rect.adjusted(PADDING_X, 10, -PADDING_X, -8)
 
         bold = QFont(option.font)
@@ -135,9 +138,21 @@ class QuestionDelegate(QStyledItemDelegate):
         painter.setPen(QColor(foreground))
         painter.drawText(chip_rect, int(Qt.AlignmentFlag.AlignCenter), chip_text)
 
+        marker_width = 0
+        if has_draft:
+            marker = "✎ " + strings.DR_MARKER
+            marker_width = small_metrics.horizontalAdvance(marker) + 10
+            painter.setFont(small)
+            painter.setPen(QColor(theme.DRAFT_MARKER))
+            painter.drawText(
+                QRect(inner.left() + uid_width + 10, inner.top(), marker_width, 20),
+                int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
+                marker,
+            )
+
         if self.show_field_tags:
             gap = 10
-            tag_left = inner.left() + uid_width + gap
+            tag_left = inner.left() + uid_width + gap + marker_width
             tag_width = chip_rect.left() - tag_left - gap
             if tag_width >= 40:
                 tag = small_metrics.elidedText(

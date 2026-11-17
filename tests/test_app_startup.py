@@ -86,6 +86,43 @@ def test_gui_starts_and_exits_cleanly(data_dir: Path) -> None:
     assert "Traceback" not in log_text
 
 
+@pytest.mark.gui
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX termination signals")
+def test_the_real_application_closes_gracefully_on_sigterm(data_dir: Path) -> None:
+    """``kill`` of the real program (own temporary data folder) ends it through the window's
+    normal close path — exit code 0, no traceback — instead of killing it mid-write."""
+    import signal
+    import time
+
+    env = os.environ.copy()
+    env.pop("VASCQBANK_DATA_DIR", None)
+    env["QT_QPA_PLATFORM"] = os.environ.get("QT_QPA_PLATFORM", "offscreen")
+    log_file = data_dir / "logs" / "vascqbank-desktop.log"
+    process = subprocess.Popen(
+        [sys.executable, "-m", "vascqbank_desktop", "--data-dir", str(data_dir)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    try:
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and not (
+            log_file.exists() and "Bundled font families" in log_file.read_text(encoding="utf-8")
+        ):
+            time.sleep(0.1)
+        time.sleep(1.0)  # the window is up and the event loop is running
+        process.send_signal(signal.SIGTERM)
+        _out, err = process.communicate(timeout=30)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+    assert process.returncode == 0, err
+    text = log_file.read_text(encoding="utf-8")
+    assert "Signal 15 received: closing the window" in text and "Traceback" not in text
+
+
 def test_logging_survives_missing_console(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Windowed Windows builds have sys.stderr = None."""
     monkeypatch.setattr(logging_setup.sys, "stderr", None)

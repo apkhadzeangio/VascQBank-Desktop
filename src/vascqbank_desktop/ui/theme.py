@@ -24,6 +24,17 @@ TEXT_MUTED = "#5E6A7A"
 SUCCESS = "#2E7D4F"
 DANGER = "#B3261E"
 HIGHLIGHT = "#FFE08A"  # search-match background
+DRAFT_MARKER = "#9A5B00"  # the "draft" tag in the question list
+DIFF_ADDED_BG = "#D8F0DF"
+DIFF_ADDED_FG = "#17603A"
+DIFF_REMOVED_BG = "#FBDADA"
+DIFF_REMOVED_FG = "#9B1C1C"
+WARNING_BG = "#FFF3D6"
+WARNING_BORDER = "#E8CB87"
+WARNING_FG = "#5C4300"
+INFO_BG = "#E8F1FC"
+INFO_BORDER = "#B9D3F2"
+INFO_FG = "#164A82"
 
 # (text colour, background) per review status. Status is always also written out
 # in words, so colour is never the only signal.
@@ -404,6 +415,132 @@ QLabel#CorrectTag {{
     font-size: 9.5pt;
 }}
 QLabel#ReadOnlyNote {{
+    color: {TEXT_MUTED};
+    font-size: 9pt;
+}}
+
+/* ---- Editor ----------------------------------------------------- */
+QPlainTextEdit#EditorField {{
+    background: {CARD_BG};
+    border: 1px solid #C9D0D9;
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 11.5pt;
+    selection-background-color: {HIGHLIGHT};
+    selection-color: {TEXT};
+}}
+QPlainTextEdit#EditorField:focus {{
+    border: 1px solid {ACCENT};
+}}
+QPlainTextEdit#EditorField[invalid="true"] {{
+    border: 1px solid {DANGER};
+    background: #FFF7F6;
+}}
+QPlainTextEdit#EditorField[stem="true"] {{
+    font-size: 12pt;
+}}
+QFrame#EditOptionCard {{
+    background: {CARD_BG};
+    border: 1px solid {BORDER};
+    border-radius: 8px;
+}}
+QFrame#EditOptionCard[correct="true"] {{
+    background: #EAF6EE;
+    border: 2px solid {SUCCESS};
+}}
+QFrame#EditOptionCard[correct="true"] QLabel#OptionLetter {{
+    background: {SUCCESS};
+    color: #FFFFFF;
+}}
+QLineEdit#EditorNote {{
+    background: {CARD_BG};
+    border: 1px solid #C9D0D9;
+    border-radius: 6px;
+    padding: 6px 10px;
+}}
+QLineEdit#EditorNote:focus {{
+    border: 1px solid {ACCENT};
+}}
+QFrame#EditorFooter {{
+    background: {CARD_BG};
+    border: 1px solid {BORDER};
+    border-radius: 8px;
+}}
+QLabel#EditorState {{
+    font-weight: 600;
+    color: {TEXT_MUTED};
+}}
+QLabel#EditorState[state="UNSAVED"] {{ color: #8A5A00; }}
+QLabel#EditorState[state="SAVING_DRAFT"] {{ color: {INFO_FG}; }}
+QLabel#EditorState[state="DRAFT_SAVED"] {{ color: #2F6F4C; }}
+QLabel#EditorState[state="SAVING"] {{ color: {INFO_FG}; }}
+QLabel#EditorState[state="SAVED"] {{ color: {SUCCESS}; }}
+QLabel#EditorState[state="ERROR"], QLabel#EditorState[state="CONFLICT"] {{ color: {DANGER}; }}
+QLabel#EditorWarning {{
+    background: {WARNING_BG};
+    border: 1px solid {WARNING_BORDER};
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: {WARNING_FG};
+}}
+QLabel#EditorInfo {{
+    background: {INFO_BG};
+    border: 1px solid {INFO_BORDER};
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: {INFO_FG};
+}}
+QLabel#ValidationList {{
+    background: #FDECEA;
+    border: 1px solid #F1B8B3;
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: {DANGER};
+}}
+QFrame#ConflictPanel {{
+    background: #FDECEA;
+    border: 1px solid #F1B8B3;
+    border-radius: 8px;
+}}
+QFrame#DraftBar, QFrame#DraftBanner {{
+    background: {INFO_BG};
+    border: 1px solid {INFO_BORDER};
+    border-radius: 8px;
+}}
+QLabel#DraftBarText {{
+    color: {INFO_FG};
+}}
+QPushButton#DangerButton {{
+    padding: 7px 18px;
+    border-radius: 6px;
+    font-weight: 600;
+    background: {CARD_BG};
+    color: {DANGER};
+    border: 1px solid {DANGER};
+}}
+QPushButton#DangerButton:hover {{
+    background: #FDECEA;
+}}
+QPushButton#DangerButton:disabled {{
+    color: {TEXT_MUTED};
+    border-color: {BORDER};
+}}
+QListWidget#RevisionList {{
+    background: {CARD_BG};
+    border: 1px solid {BORDER};
+    border-radius: 8px;
+    outline: none;
+}}
+QListWidget#RevisionList::item {{
+    padding: 9px 12px;
+    border-bottom: 1px solid {BORDER};
+}}
+QListWidget#RevisionList::item:selected {{
+    background: {ACCENT_SOFT};
+    color: {TEXT};
+    border-left: 3px solid {ACCENT};
+}}
+QLabel#DiffLegend {{
     color: {TEXT_MUTED};
     font-size: 9pt;
 }}

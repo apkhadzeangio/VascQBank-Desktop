@@ -33,6 +33,7 @@ class QuestionListModel(QAbstractListModel):
         self._results = ResultSet()
         self._pages: OrderedDict[int, list[QuestionSummary | None]] = OrderedDict()
         self.pages_loaded = 0  # queries issued since creation (diagnostics and tests)
+        self.draft_ids: frozenset[int] = frozenset()  # questions with an unfinished draft (list marker)
 
     # ------------------------------------------------------------------ results
     @property
@@ -44,6 +45,15 @@ class QuestionListModel(QAbstractListModel):
         self._results = results
         self._pages.clear()
         self.endResetModel()
+
+    def set_draft_ids(self, ids: set[int] | frozenset[int]) -> None:
+        """Mark the questions that have a draft; only the visible rows are repainted."""
+        new_ids = frozenset(ids)
+        if new_ids == self.draft_ids:
+            return
+        self.draft_ids = new_ids
+        if len(self._results):
+            self.dataChanged.emit(self.index(0), self.index(len(self._results) - 1))
 
     def row_of(self, question_id: int | None) -> int | None:
         return self._results.position_of(question_id)

@@ -27,6 +27,8 @@ from vascqbank_desktop.domain.catalog import (
     QuestionDetail,
     QuestionLocation,
     QuestionSummary,
+    RevisionDetail,
+    RevisionInfo,
     SortOrder,
 )
 from vascqbank_desktop.domain.question import QuestionContent, SourceKind
@@ -307,3 +309,56 @@ def nearest_id(
         [anchor[0], anchor[0], anchor[1], *params],
     ).fetchone()
     return int(before[0]) if before is not None else None
+
+
+# --------------------------------------------------------------------------
+# revision history (read-only; one question at a time)
+# --------------------------------------------------------------------------
+_REVISION_INFO_SQL = """
+SELECT r.id, r.question_id, r.revision_no, r.origin, r.author, r.note, r.created_at,
+       r.id = q.current_revision_id,
+       EXISTS (SELECT 1 FROM review_events a WHERE a.revision_id = r.id AND a.action = 'APPROVE'),
+       e.from_status, e.to_status, e.note
+FROM question_revisions r
+JOIN questions q ON q.id = r.question_id
+LEFT JOIN review_events e ON e.revision_id = r.id AND e.action = 'EDITED'
+"""
+
+
+def _revision_info(row: sqlite3.Row) -> RevisionInfo:
+    return RevisionInfo(
+        id=int(row[0]),
+        question_id=int(row[1]),
+        revision_no=int(row[2]),
+        origin=row[3],
+        author=row[4],
+        note=row[5],
+        created_at=row[6],
+        is_current=bool(row[7]),
+        was_approved=bool(row[8]),
+        from_status=ReviewStatus(row[9]) if row[9] else None,
+        to_status=ReviewStatus(row[10]) if row[10] else None,
+        event_note=row[11],
+    )
+
+
+def list_revisions(conn: sqlite3.Connection, question_id: int) -> list[RevisionInfo]:
+    """Revision metadata of one question, newest first — no text is read."""
+    rows = conn.execute(
+        f"{_REVISION_INFO_SQL} WHERE r.question_id = ? ORDER BY r.revision_no DESC", (question_id,)
+    ).fetchall()
+    return [_revision_info(r) for r in rows]
+
+
+def get_revision(conn: sqlite3.Connection, revision_id: int) -> RevisionDetail | None:
+    """One revision with its full text."""
+    info_row = conn.execute(f"{_REVISION_INFO_SQL} WHERE r.id = ?", (revision_id,)).fetchone()
+    if info_row is None:
+        return None
+    text = conn.execute(
+        "SELECT stem, option_a, option_b, option_c, option_d, option_e, correct_letter, explanation"
+        " FROM question_revisions WHERE id = ?",
+        (revision_id,),
+    ).fetchone()
+    content = QuestionContent(text[0], tuple(text[1:6]), AnswerLetter.from_letter(text[6]), text[7])
+    return RevisionDetail(_revision_info(info_row), content)

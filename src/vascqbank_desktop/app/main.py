@@ -110,6 +110,39 @@ def _set_windows_app_id() -> None:
         pass
 
 
+def install_signal_shutdown(app, window) -> dict[int, object]:  # noqa: ANN001
+    """Close the window — which writes any pending draft first — when the program is asked to stop.
+
+    ``kill``, a systemd stop, a closing terminal (SIGHUP) or Ctrl+C would otherwise end the
+    process at once and lose up to a second of typing. A refused close (the draft could not be
+    written and the reviewer chose to keep the text) simply leaves the program running.
+    Returns the handlers that were replaced, so a caller can restore them.
+    """
+    import signal
+
+    from PySide6.QtCore import QTimer
+
+    def handler(signum: int, _frame: object) -> None:
+        log.info("Signal %s received: closing the window", signum)
+        window.close()
+
+    previous: dict[int, object] = {}
+    for name in ("SIGINT", "SIGTERM", "SIGHUP"):
+        number = getattr(signal, name, None)
+        if number is None:
+            continue
+        try:
+            previous[int(number)] = signal.signal(number, handler)
+        except (ValueError, OSError):  # not the main thread, or not supported on this platform
+            log.debug("Could not install a handler for %s", name)
+    # Python runs signal handlers only while the interpreter is executing: wake it regularly.
+    pump = QTimer(app)
+    pump.setInterval(250)
+    pump.timeout.connect(lambda: None)
+    pump.start()
+    return previous
+
+
 def run_gui(paths: AppPaths, argv: Sequence[str], exit_after_ms: int = 0) -> int:
     from PySide6.QtCore import QTimer
     from PySide6.QtGui import QIcon
@@ -149,6 +182,7 @@ def run_gui(paths: AppPaths, argv: Sequence[str], exit_after_ms: int = 0) -> int
 
     window = MainWindow(status, SUBJECTS, app_icon=icon)
     window.show()
+    install_signal_shutdown(app, window)
     if exit_after_ms > 0:
         QTimer.singleShot(exit_after_ms, app.quit)
     return int(app.exec())

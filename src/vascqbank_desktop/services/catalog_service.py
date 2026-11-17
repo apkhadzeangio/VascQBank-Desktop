@@ -29,6 +29,8 @@ from vascqbank_desktop.domain.catalog import (
     QuestionLocation,
     QuestionSummary,
     ResultSet,
+    RevisionDetail,
+    RevisionInfo,
     SearchMode,
 )
 from vascqbank_desktop.domain.question_id import parse_reference
@@ -142,6 +144,16 @@ class CatalogService:
     def detail_by_uid(self, uid: str) -> QuestionDetail | None:
         with self._reader() as conn:
             return repo.get_detail_by_uid(conn, uid)
+
+    def revisions(self, question_id: int) -> list[RevisionInfo]:
+        """The revision history of one question, newest first (metadata only)."""
+        with self._reader() as conn:
+            return repo.list_revisions(conn, question_id)
+
+    def revision(self, revision_id: int) -> RevisionDetail | None:
+        """One revision with its full text."""
+        with self._reader() as conn:
+            return repo.get_revision(conn, revision_id)
 
     def locate(self, uid: str) -> QuestionLocation | None:
         with self._reader() as conn:

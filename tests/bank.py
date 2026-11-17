@@ -169,3 +169,90 @@ def set_status(paths: AppPaths, uid: str, status: ReviewStatus) -> None:
         conn.execute("COMMIT")
     finally:
         conn.close()
+
+
+def approve(paths: AppPaths, uid: str, *, actor: str = "ტესტი") -> int:
+    """Approve a question the way the Phase 5 service will: status, approval pointers and an
+    APPROVE event bound to the current revision. Returns the approved revision's number."""
+    conn = open_database(paths.database_file)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        now = utc_now_iso()
+        row = conn.execute(
+            "SELECT q.id, q.status, q.current_revision_id, r.revision_no FROM questions q "
+            "JOIN question_revisions r ON r.id = q.current_revision_id WHERE q.question_uid = ?",
+            (uid,),
+        ).fetchone()
+        conn.execute(
+            "UPDATE questions SET status = 'APPROVED', approved_revision_id = current_revision_id, "
+            "approved_at = ?, modified_at = ?, lock_version = lock_version + 1 WHERE id = ?",
+            (now, now, row["id"]),
+        )
+        conn.execute(
+            "INSERT INTO review_events (question_id, action, from_status, to_status, revision_id, actor, "
+            "note, created_at) VALUES (?, 'APPROVE', ?, 'APPROVED', ?, ?, NULL, ?)",
+            (row["id"], row["status"], row["current_revision_id"], actor, now),
+        )
+        conn.execute("COMMIT")
+        return int(row["revision_no"])
+    finally:
+        conn.close()
+
+
+def question_row(paths: AppPaths, uid: str) -> dict:
+    """Authoritative state of one question plus its counts, for assertions."""
+    conn = open_database(paths.database_file)
+    try:
+        q = dict(conn.execute("SELECT * FROM questions WHERE question_uid = ?", (uid,)).fetchone())
+        q["revision_count"] = conn.execute(
+            "SELECT count(*) FROM question_revisions WHERE question_id = ?", (q["id"],)
+        ).fetchone()[0]
+        q["event_count"] = conn.execute(
+            "SELECT count(*) FROM review_events WHERE question_id = ?", (q["id"],)
+        ).fetchone()[0]
+        return q
+    finally:
+        conn.close()
+
+
+def limit_database_size(monkeypatch, *modules) -> None:
+    """Make every connection opened through these modules behave as if the disk were full:
+    SQLite may not allocate a single page more than the file already has."""
+
+    def full_disk(path):
+        conn = open_database(path)
+        pages = conn.execute("PRAGMA page_count").fetchone()[0]
+        conn.execute(f"PRAGMA max_page_count = {pages}")
+        return conn
+
+    for module in modules:
+        monkeypatch.setattr(module, "open_database", full_disk)
+
+
+def draft_row(paths: AppPaths, uid: str) -> dict | None:
+    """The draft row of a question (or ``None``), read straight from the database."""
+    conn = open_database(paths.database_file)
+    try:
+        row = conn.execute(
+            "SELECT d.* FROM drafts d JOIN questions q ON q.id = d.question_id WHERE q.question_uid = ?",
+            (uid,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def revisions_of(paths: AppPaths, uid: str) -> list[dict]:
+    """Every revision of a question, oldest first."""
+    conn = open_database(paths.database_file)
+    try:
+        return [
+            dict(r)
+            for r in conn.execute(
+                "SELECT r.* FROM question_revisions r JOIN questions q ON q.id = r.question_id "
+                "WHERE q.question_uid = ? ORDER BY r.revision_no",
+                (uid,),
+            )
+        ]
+    finally:
+        conn.close()

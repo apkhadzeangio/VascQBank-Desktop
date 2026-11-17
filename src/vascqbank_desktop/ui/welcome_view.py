@@ -43,6 +43,7 @@ class WelcomeView(QWidget):
 
     importRequested = Signal()
     resumeRequested = Signal()
+    draftsRequested = Signal()
 
     def __init__(self, status: StorageStatus, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -69,9 +70,11 @@ class WelcomeView(QWidget):
         page.addSpacing(6)
 
         self.empty_card = self._build_empty_state()
+        self.drafts_card = self._build_drafts_card()
         self.resume_card = self._build_resume_card()
         self.bank_card = self._build_bank_card()
         page.addWidget(self.empty_card)
+        page.addWidget(self.drafts_card)
         page.addWidget(self.resume_card)
         page.addWidget(self.bank_card)
         page.addWidget(self._build_storage_card(status))
@@ -92,6 +95,26 @@ class WelcomeView(QWidget):
         layout.addSpacing(4)
         layout.addLayout(row)
         return card
+
+    def _build_drafts_card(self) -> QFrame:
+        card, layout = _card("EmptyStateCard")
+        layout.addWidget(_label(strings.DR_LIST_TITLE, "CardTitle"))
+        self.drafts_label = _label("", "CardBody")
+        layout.addWidget(self.drafts_label)
+        self.drafts_button = QPushButton(strings.DR_BANNER_BUTTON)
+        self.drafts_button.setObjectName("PrimaryButton")
+        self.drafts_button.clicked.connect(self.draftsRequested)
+        row = QHBoxLayout()
+        row.addWidget(self.drafts_button)
+        row.addStretch(1)
+        layout.addLayout(row)
+        card.hide()
+        return card
+
+    def set_drafts(self, count: int) -> None:
+        """Remind the reviewer of unfinished drafts (e.g. after the program stopped unexpectedly)."""
+        self.drafts_card.setVisible(count > 0)
+        self.drafts_label.setText(strings.DR_BANNER.format(count=count))
 
     def _build_resume_card(self) -> QFrame:
         card, layout = _card("EmptyStateCard")
