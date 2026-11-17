@@ -8,8 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from vascqbank_desktop.config.paths import AppPaths
+from vascqbank_desktop.db.backup import create_backup, prune_automatic_backups
 from vascqbank_desktop.db.connection import has_fts5_trigram, open_database, quick_check
-from vascqbank_desktop.db.migrations import LATEST_VERSION, migrate, read_metadata
+from vascqbank_desktop.db.errors import SchemaTooNewError
+from vascqbank_desktop.db.migrations import LATEST_VERSION, get_schema_version, migrate, read_metadata
 
 log = logging.getLogger(__name__)
 
@@ -28,17 +30,27 @@ class StorageStatus:
     integrity_ok: bool
     sqlite_version: str
     fts5_trigram: bool
+    pre_migration_backup: Path | None = None
 
 
 def initialize_storage(paths: AppPaths) -> StorageStatus:
     """Create directories, open the database, migrate it and report status.
 
-    The connection is closed before returning; Phase 2 introduces a
-    long-lived repository/unit-of-work for question data.
+    An existing database that needs migrating is first backed up and the
+    backup verified; if that fails, the migration does not run.
     """
     paths.ensure_directories()
     conn = open_database(paths.database_file)
+    backup_path: Path | None = None
     try:
+        version = get_schema_version(conn)
+        if version > LATEST_VERSION:
+            raise SchemaTooNewError(found=version, supported=LATEST_VERSION)
+        if 0 < version < LATEST_VERSION:
+            backup = create_backup(conn, paths.backups_dir, f"pre-migration-v{version}")
+            backup_path = backup.path
+            prune_automatic_backups(paths.backups_dir)
+            log.info("Verified pre-migration backup: %s", backup.path)
         result = migrate(conn)
         if result.applied:
             log.info(
@@ -59,6 +71,7 @@ def initialize_storage(paths: AppPaths) -> StorageStatus:
             integrity_ok=quick_check(conn),
             sqlite_version=sqlite3.sqlite_version,
             fts5_trigram=has_fts5_trigram(conn),
+            pre_migration_backup=backup_path,
         )
     finally:
         conn.close()

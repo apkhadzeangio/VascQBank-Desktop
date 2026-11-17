@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
+    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
+from vascqbank_desktop.domain.review_status import ReviewStatus
 from vascqbank_desktop.services.storage import StorageStatus
 from vascqbank_desktop.ui import strings
 
@@ -35,7 +38,9 @@ def _label(text: str, object_name: str, *, wrap: bool = True, selectable: bool =
 
 
 class WelcomeView(QWidget):
-    """Shown while the database contains no questions."""
+    """Home page: empty state or bank summary, storage facts, roadmap."""
+
+    importRequested = Signal()
 
     def __init__(self, status: StorageStatus, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -61,7 +66,10 @@ class WelcomeView(QWidget):
         page.addWidget(_label(strings.WELCOME_TAGLINE, "PageTagline"))
         page.addSpacing(6)
 
-        page.addWidget(self._build_empty_state())
+        self.empty_card = self._build_empty_state()
+        self.bank_card = self._build_bank_card()
+        page.addWidget(self.empty_card)
+        page.addWidget(self.bank_card)
         page.addWidget(self._build_storage_card(status))
         page.addWidget(self._build_roadmap())
         page.addStretch(1)
@@ -71,7 +79,53 @@ class WelcomeView(QWidget):
         self.empty_title = _label(strings.EMPTY_TITLE, "CardTitle")
         layout.addWidget(self.empty_title)
         layout.addWidget(_label(strings.EMPTY_BODY, "CardBody"))
+        self.import_button = QPushButton(strings.IMPORT_BUTTON)
+        self.import_button.setObjectName("PrimaryButton")
+        self.import_button.clicked.connect(self.importRequested)
+        row = QHBoxLayout()
+        row.addWidget(self.import_button)
+        row.addStretch(1)
+        layout.addSpacing(4)
+        layout.addLayout(row)
         return card
+
+    def _build_bank_card(self) -> QFrame:
+        card, layout = _card()
+        layout.addWidget(_label(strings.BANK_TITLE, "CardTitle"))
+        self.bank_total_label = _label("", "BankTotal")
+        layout.addWidget(self.bank_total_label)
+        self.bank_status_labels: dict[ReviewStatus, QLabel] = {}
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(28)
+        for column, status in enumerate(ReviewStatus):
+            label = _label("", "FieldValue", wrap=False)
+            self.bank_status_labels[status] = label
+            grid.addWidget(label, 0, column)
+        grid.setColumnStretch(len(ReviewStatus), 1)
+        layout.addLayout(grid)
+        layout.addWidget(_label(strings.BANK_NOTE, "CardBody"))
+        self.bank_import_button = QPushButton(strings.IMPORT_BUTTON)
+        self.bank_import_button.setObjectName("SecondaryButton")
+        self.bank_import_button.clicked.connect(self.importRequested)
+        row = QHBoxLayout()
+        row.addWidget(self.bank_import_button)
+        row.addStretch(1)
+        layout.addLayout(row)
+        return card
+
+    def set_bank_counts(self, total: int, subjects_with_questions: int,
+                        by_status: dict[ReviewStatus, int]) -> None:
+        """Switch between the empty state and the bank summary."""
+        has_questions = total > 0
+        self.empty_card.setVisible(not has_questions)
+        self.bank_card.setVisible(has_questions)
+        self.bank_total_label.setText(
+            strings.BANK_TOTAL.format(total=f"{total:,}".replace(",", "\u00a0"),
+                                      subjects=subjects_with_questions)
+        )
+        for status, label in self.bank_status_labels.items():
+            label.setText(strings.BANK_STATUS_ROW.format(label=status.label_ka,
+                                                         count=by_status.get(status, 0)))
 
     def _build_storage_card(self, status: StorageStatus) -> QFrame:
         card, layout = _card()

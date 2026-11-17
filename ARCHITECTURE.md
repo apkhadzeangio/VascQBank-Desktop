@@ -116,135 +116,127 @@ environment); Ubuntu 22.04's system SQLite 3.37.2 is the oldest relevant case.
 * From Phase 2 on, a backup is taken automatically before any migration runs
   (§10).
 
-Phase 1 schema (migration 1): `schema_migrations`, `app_metadata`. Question
-tables arrive as migration 2.
+Migration 1: `schema_migrations`, `app_metadata`. Migration 2: the question
+schema (§5). Existing Phase 1 databases are backed up and then migrated.
 
-## 5. Data model (design — Phase 2, migration 2)
+## 5. Data model (implemented — migration 2, `db/schema_v2.py`)
 
 ### 5.1 Identity
 
 * `question_uid` = `<SUBJECT>-<NNNN>` (e.g. `ALI-0001`), from subject code and
   original source number. Immutable, unique, identical to the VascQBank-Review
-  web application's `external_id`, so the same ID means the same question in
-  both tools. Implemented now as `domain.question_id.QuestionId`.
-* `source_fingerprint` (SHA-256 of normalised imported content) detects
-  upstream changes; it is **never** used as identity.
+  web application's `external_id`; enforced by a `CHECK` that recomputes it
+  from `subject_code` and `source_number`.
+* `source_fingerprint` (SHA-256 of the normalised imported content, including
+  refined-master extras) detects upstream changes; it is never used as identity.
 
 ### 5.2 Tables
 
-```sql
-subjects        (code PK, name_ka, target_count, sort_order UNIQUE)
+| Table | Holds |
+|---|---|
+| `subjects` | the 12 subjects (code, Georgian name, target count, order), seeded by the migration |
+| `import_batches` | one row per confirmed import: counts, backup file name, full JSON manifest (sources with SHA-256, every question's outcome and fingerprint, every issue) |
+| `questions` | identity, `status`, provenance (`source_kind`, `source_file`, `source_line`, `import_batch_id`), `source_fingerprint`, **`original_content_json`** (the complete imported content, immutable), `current_revision_id`, `approved_revision_id`, `lock_version`, `created_at`/`modified_at`/`approved_at` |
+| `question_revisions` | full content per revision: stem, `option_a`…`option_e` (ა–ე), `correct_letter`, explanation, `origin` (`IMPORT`/`EDIT`/`RESTORE`), author, note, `content_hash`, `created_at` |
+| `review_events` | editorial history: action, from/to status, revision, actor, note, time |
+| `export_runs` | prepared for the export phases (format, scope, files, manifest) |
 
-import_batches  (id PK, source_kind CHECK IN ('PAIRED_TXT','REFINED_MASTER'),
-                 source_label, source_sha256, started_at, finished_at,
-                 added_count, unchanged_count, conflict_count, report_json)
+All tables are `STRICT`. Enforced by the database itself (each rule has a test):
 
-questions       (id PK,
-                 question_uid UNIQUE NOT NULL,
-                 subject_code NOT NULL → subjects,
-                 source_number NOT NULL CHECK (> 0),
-                 status NOT NULL CHECK IN ('PENDING_REVIEW','IN_REVIEW','APPROVED','REJECTED'),
-                 current_revision_id  → question_revisions (deferred FK),
-                 approved_revision_id → question_revisions (deferred FK),
-                 import_batch_id NOT NULL → import_batches,
-                 source_fingerprint NOT NULL,
-                 lock_version NOT NULL DEFAULT 0,
-                 created_at, modified_at, approved_at,
-                 UNIQUE (subject_code, source_number),
-                 CHECK (question_uid = subject_code || '-' || printf('%04d', source_number)),
-                 CHECK ((status = 'APPROVED') = (approved_revision_id IS NOT NULL)))
-
-question_revisions (id PK, question_id → questions, revision_no,
-                 stem, option_a … option_e        -- ა ბ გ დ ე
-                 correct_letter CHECK IN ('ა','ბ','გ','დ','ე'),
-                 explanation,
-                 origin CHECK IN ('IMPORT','EDIT','RESTORE'),
-                 restored_from_revision_id → question_revisions,
-                 author, note, content_hash, created_at,
-                 UNIQUE (question_id, revision_no))
-
-review_events   (id PK, question_id → questions,
-                 action CHECK IN ('IMPORTED','EDITED','START_REVIEW','APPROVE',
-                                  'REJECT','REOPEN','RESTORE','COMMENT'),
-                 from_status, to_status, revision_id, actor, note, created_at)
-
-export_runs     (id PK, format CHECK IN ('DOCX','TXT'), scope_json,
-                 question_count, files_json, manifest_sha256, created_at)
-
-question_search  -- FTS5 virtual table (stem, options, explanation), trigram tokenizer
-```
-
-Enforcement in the database, not only in Python:
-
-* triggers make `question_revisions` and `review_events` append-only
-  (`RAISE(ABORT)` on UPDATE/DELETE);
-* a trigger forbids `DELETE` on `questions` (rejection is a status, not a deletion);
-* `questions.import_batch_id NOT NULL` means every question traces back to an
-  import; the import service is the only code that inserts questions, and an
-  architecture test will forbid `INSERT INTO questions` anywhere else.
+* a new question must be `PENDING_REVIEW` with no approval — nothing can be
+  imported as approved;
+* `status = 'APPROVED'` ⇔ approval revision and timestamp are set;
+* identity, provenance and `original_content_json` can never be updated;
+  questions can never be deleted;
+* `question_revisions`, `review_events`, `import_batches`, `export_runs` are
+  append-only; revision numbers per question are contiguous (1, 2, 3 …);
+* `current_revision_id` / `approved_revision_id` must point to a revision of
+  the same question;
+* `current_revision_id` is `NOT NULL`; it and `import_batch_id` are
+  `DEFERRABLE INITIALLY DEFERRED` so a question, its first revision and the
+  (append-only, written-last) batch row can be inserted in one transaction;
+* only `db/question_repository.py` inserts into `questions` (architecture test).
 
 Indexes: `questions(subject_code, status)`, `questions(status)`,
-`question_revisions(question_id, revision_no DESC)`, `review_events(question_id, created_at)`.
+`questions(import_batch_id)`, `question_revisions(question_id, revision_no DESC)`,
+`review_events(question_id, id)`, and **every foreign-key child column**
+(`current_revision_id`, `approved_revision_id`, `restored_from_revision_id`,
+`review_events.revision_id`). The last group matters: without it each inserted
+revision made SQLite scan `questions` for deferred references, and the
+10,000-question import took 27.7 s instead of 1.0 s. A test now fails if any
+foreign-key column lacks an index.
+
+The full-text search table moves to the browsing/search phase (migration 3).
 
 ### 5.3 Text and time
 
-* All text is stored after `normalize_text()` (no BOM, LF, NFC). Edits are
-  normalised the same way, so hashes and comparisons are stable.
+* All imported text passes `normalize_text()` (no BOM, LF, NFC). NFC never
+  alters Georgian letters; Georgian text is stored byte-identical (tested).
 * Timestamps: UTC ISO-8601 with offset (`2026-11-17T17:20:00+00:00`), shown in
-  the computer's local time zone (Asia/Tbilisi for the primary user).
+  the computer's local time zone.
 
-## 6. Performance at 10,000 records (design)
+## 6. Performance at 10,000 records (measured)
 
-Size estimate: Georgian letters take 3 bytes in UTF-8; a question with five
-options and an explanation is ≈1.5–2.5 KB. 10,000 current revisions ≈ 25 MB;
-with several revisions each, the database stays well under 200 MB. This fits
-comfortably in SQLite and in memory.
+`tests/test_performance.py` generates the full synthetic bank — all 12
+subjects at their target counts, exactly 10,000 questions — and runs the real
+services. Measured in the development environment (Linux, Python 3.13):
 
-| Operation | Approach | Target |
-|---|---|---|
-| Start-up | migrations + `quick_check`; no question data loaded until needed | < 2 s |
-| Subject list / counts | one `GROUP BY subject_code, status` on indexed columns | < 50 ms |
-| Question list (one subject, ≤1,500 rows) | summary rows only (uid, number, status, 160-char preview) in a `QAbstractTableModel` | < 100 ms |
-| All 10,000 rows | same summary model with `fetchMore` batches of 500 | < 300 ms |
-| Full-text search | FTS5 `trigram` index — substring matching suits Georgian inflection (`აორტ` finds `აორტის`, `აორტაში`); queries shorter than 3 characters fall back to `LIKE` | < 150 ms |
-| Save an edit | one transaction: revision + question update + event + FTS row | < 50 ms |
-| Import 10,000 | parse and validate in memory, then one transaction | < 10 s |
-| DOCX export 10,000 | background worker with progress | < 60 s |
+| Operation | Measured | Test budget |
+|---|---:|---:|
+| Dry run: discover, parse, validate 10,000 questions + compare with DB | 0.4 s | < 10 s |
+| Confirmed import of 10,000 incl. verified pre-import backup | 1.0 s | < 15 s |
+| Per-subject/status counts (sidebar) | < 0.01 s | < 0.5 s |
+| Dry run against a database already holding 10,000 | 0.6 s | < 10 s |
+| Database size with 10,000 questions | 33.5 MB | — |
 
-Threading: a `sqlite3` connection is never shared between threads. Long jobs
-(import, export, backup, integrity check) run in a `QThreadPool` worker with
-its own connection and report progress through Qt signals; WAL lets the UI keep
-reading while they write. A synthetic 10,000-question dataset (generated in
-tests, never real content) will back a `perf`-marked benchmark suite.
+Dry runs and imports run on a background `QThread` (`ui/workers.py`) with
+their own SQLite connection, so the window stays responsive. Browsing and
+search design (summary model, `fetchMore`, FTS5 trigram) is unchanged and
+arrives in Phase 3.
 
-FTS availability: Phase 1's `--self-check` already reports whether the SQLite
-build supports FTS5 trigram (`fts5_trigram: True` in the test environment). If
-a build lacks it, search falls back to `LIKE` over the summary data.
+## 7. Question import and validation (implemented)
 
-## 7. Question import and validation (design)
+### 7.1 Sources and adapters
 
-### 7.1 Sources
+Both adapters produce the same `domain.question.ImportedQuestion`
+(`QuestionId`, `QuestionContent` with stem, five options, correct letter,
+explanation, `SourceLocation`, ordered `extras`).
 
-Two adapters, one internal record format (`ImportedQuestion`: subject, number,
-stem, five options, correct letter, explanation, provenance):
+1. **Paired TXT** — `importexport/paired_txt.py`: `<CODE>_questions.txt` +
+   `<CODE>_explanations.txt`.
+2. **Refined master** — `importexport/refined_master.py`:
+   `REFINED_MASTER_QBANK.txt`. The grammar was **verified against the real
+   file** (VascQBank-10K, inspected 2026-11-17: 384 records, LF, no BOM, one
+   identical field order in every record, every section single-line except
+   `EVIDENCE`, which can contain blank lines) and matches VascQBank-Review's
+   `docs/UPSTREAM_FORMAT.md`. `ACADEMIC EXPLANATION` becomes the explanation;
+   `SOURCE FINGERPRINT`, `SOURCE COMMIT`, `STATUS`, `QA SCORE`, `REVIEWED`,
+   `CLINICAL REASONING`, `DISTRACTOR ANALYSIS`, `EVIDENCE`, `CLINICAL PEARL`
+   and `QA GATES` are kept in order in `extras` and in `original_content_json`.
+   Only records with `STATUS: APPROVED` (= refined) are accepted; that status
+   never grants reviewer approval. Gaps in `ORIGINAL ID` are normal there.
 
-1. **Paired TXT** — `<CODE>_questions.txt` + `<CODE>_explanations.txt`, the
-   VascQBank-10K convention (AGENTS.md §6–8), required by this project.
-2. **Refined master** — `ACADEMIC_REVIEW/REFINED_MASTER_QBANK.txt`, which the
-   VascQBank-Review web application uses as its sole source. Supporting it is
-   optional; **which source(s) the desktop app accepts is a Phase 2 decision**.
+`importexport/discovery.py` turns selected files/folders into sources. Folders
+are scanned non-recursively, so the VascQBank-10K root yields the 24 paired
+files but not `ACADEMIC_REVIEW/`; the master must be chosen explicitly.
 
-Its `STATUS: APPROVED` field reflects the automated editorial process and
-**never** sets the reviewer's approval: every imported question starts as
-`PENDING_REVIEW`.
+**Choose one source per question.** Both formats describe the same IDs
+(`ALI-0001` …) with different wording (raw vs. refined). Selecting both at once
+marks every overlapping ID as a duplicate and imports none of them. Importing
+one format first and the other later makes the second one's overlapping IDs
+*conflicts*, which are never imported (insert-only). Decide the authoritative
+source before the first real import.
+
+A read-only check of the real VascQBank-10K files (counts only) found all
+1,700 paired questions and all 384 master records structurally valid.
 
 ### 7.2 Paired TXT grammar
 
 ```
 questions:     N. <stem, may continue on following lines>
-               ა) <option>
+               ა) <option>                (may continue on following lines)
                ბ) <option>
-               *გ) <option>          ← ASCII '*' immediately before the letter, exactly once
+               *გ) <option>               ← ASCII '*' directly before the letter, exactly once
                დ) <option>
                ე) <option>
                <blank line>
@@ -252,41 +244,58 @@ explanations:  N. გ) <text, may continue on following lines>
                <blank line>
 ```
 
-### 7.3 Validation report
+Parsing is line-based: a numbered line starts a new question when it is the
+first item, follows a blank line, or follows answer options. Stray blank lines
+inside a question (present in the real files) are therefore harmless, and a
+missing blank line between questions is only a warning.
 
-Every import is a **dry run first**: the user sees a report, then confirms.
+### 7.3 Validation (`validation/issues.py`, Georgian messages)
 
-Errors (the affected subject is not imported):
+Errors exclude the affected question (or, for file-level errors, the file):
 
-| Code | Rule |
+| Area | Codes |
 |---|---|
-| E01 | file is not valid UTF-8 (line and column reported — implemented now in `read_utf8_text`) |
-| E02 | file name does not match `<CODE>_questions.txt` / `<CODE>_explanations.txt` for one of the 12 codes |
-| E03 | questions file without its explanations file, or vice versa |
-| E04 | numbering does not start at 1, has gaps, duplicates or is out of order |
-| E05 | not exactly five options, or letters not ა ბ გ დ ე in order |
-| E06 | zero or several `*`, or `*` not directly before the letter |
-| E07 | empty stem, option or explanation |
-| E08 | question without explanation, or explanation without question |
-| E09 | explanation letter differs from the starred option |
-| E10 | `*` inside the explanations file |
-| E11 | number exceeds the subject's target count |
+| Files | `FILE_NOT_UTF8` (line/column), `FILE_UNREADABLE`, `FILE_EMPTY`, `UNKNOWN_SUBJECT`, `MISSING_EXPLANATIONS_FILE`, `MISSING_QUESTIONS_FILE`, `DUPLICATE_FILE`, `UNEXPECTED_TEXT` |
+| Numbering / IDs | `INVALID_NUMBER`, `DUPLICATE_NUMBER`, `NUMBER_ABOVE_TARGET`, `DUPLICATE_ID_IN_SELECTION` |
+| Structure | `EMPTY_STEM`, `OPTION_COUNT`, `OPTION_LETTERS`, `OPTION_FORMAT`, `EMPTY_OPTION`, `NO_CORRECT_ANSWER`, `MULTIPLE_CORRECT_ANSWERS`, `MISPLACED_MARKER` |
+| Explanations | `MISSING_EXPLANATION`, `ORPHAN_EXPLANATION`, `DUPLICATE_EXPLANATION`, `EXPLANATION_FORMAT`, `EXPLANATION_MARKER`, `EXPLANATION_LETTER_MISMATCH`, `EMPTY_EXPLANATION` |
+| Refined master | `MASTER_FIELD_MISSING`, `MASTER_FIELD_ORDER`, `MASTER_UNEXPECTED_LINE`, `MASTER_NOT_REFINED`, `MASTER_ANSWER_MISMATCH` (letter **and** text), `MASTER_NO_RECORDS` |
 
-Warnings (imported, flagged for the reviewer): explanation not exactly two
-sentences (AGENTS.md rule); identical options within a question; duplicate
-stems; Markdown/emoji remnants; Latin or Cyrillic look-alike letters inside
-Georgian words; trailing whitespace normalised.
+Warnings never reject a question: `EXPLANATION_SENTENCES` (paired format
+only — not applied to the refined academic explanation), `DUPLICATE_STEM`
+(within the selection and against the database), `DUPLICATE_OPTIONS`,
+`NUMBER_GAP`, `NUMBER_ORDER`, `STRAY_ASTERISK`, `MARKDOWN_REMNANT`,
+`MISSING_BLANK_LINE`, `FILE_UNRECOGNIZED`, and `CONFLICT_EXISTING` (see 7.4).
+No rule judges medical correctness.
 
-### 7.4 Re-import policy (insert-only)
+### 7.4 Two-stage import and re-import policy (`services/import_service.py`)
+
+**Stage A — dry run** parses and validates and compares with the database
+without writing anything (tested byte-for-byte). Report: parsed, structurally
+valid, invalid, duplicates in selection, identical existing, conflicts,
+errors, warnings, eligible.
 
 | Situation | Result |
 |---|---|
-| `question_uid` not in database | inserted: revision 1 (`IMPORT`), status `PENDING_REVIEW` |
-| present, same fingerprint | skipped as unchanged |
-| present, different fingerprint | **not overwritten**; listed as "changed upstream" so reviewer edits are never lost; adopting the new text is an explicit, later reviewer action |
+| ID not in database, valid | **eligible** → revision 1 (`IMPORT`), `PENDING_REVIEW`, `IMPORTED` event |
+| ID present, same fingerprint | skipped as identical |
+| ID present, different fingerprint | **conflict**: never imported; existing record and reviewer edits untouched |
+| ID appears twice in the selection | error, neither copy imported |
 
-Each import is one transaction recorded in `import_batches` with its full
-report; the database is backed up first (§10).
+**Stage B — confirmed import**, only after the user confirms:
+
+1. every source file is re-hashed; if any changed since the dry run, abort;
+2. a verified backup is created (§10); if that fails, abort;
+3. one transaction inserts questions, revisions, events and finally the batch
+   row with its manifest (`INSERT … ON CONFLICT DO NOTHING`, so an ID that
+   appeared after the dry run is skipped, never duplicated or overwritten);
+4. revision pointers are re-checked before `COMMIT`; any failure rolls back
+   everything (tested by forcing a constraint failure on the 4th question).
+
+The UI (`ui/import_dialog.py`) follows the same three steps: select files or
+a folder → validation summary and issue table (errors first) → confirmation
+dialog → result (created, skipped, backup path, batch number). The sidebar and
+home page then show real per-subject and per-status counts.
 
 ## 8. Editorial revision history (design)
 
@@ -319,26 +328,28 @@ Every transition writes a `review_events` row in the same transaction. Exports
 read `approved_revision_id`, so only the exact approved text can ever be
 exported.
 
-## 10. Local backup and recovery (design)
+## 10. Local backup and recovery
 
-* **Mechanism**: SQLite's online backup API (`Connection.backup`), which
-  produces a consistent snapshot even with WAL and open connections. The live
-  database file is never copied directly.
-* **When**: automatically at start-up if the last backup is older than 24 h,
-  before every migration, before every import, before every restore; manually
-  from the menu.
-* **Where**: `<data>/backups/vascqbank-YYYYMMDD-HHMMSS-<reason>.sqlite3` plus a
-  JSON manifest (database_id, schema version, counts per status, SHA-256).
-  "Save backup as…" copies one to a chosen location (e.g. USB drive).
-* **Verification**: each backup is reopened read-only and checked
-  (application_id, schema version, `PRAGMA integrity_check`, counts).
-* **Retention**: manual backups kept forever; the 20 most recent automatic ones kept.
-* **Restore**: validate the chosen backup (ours, supported schema, integrity ok)
-  → safety backup of the current database → close connections → copy to a temp
-  file and atomically replace → remove stale `-wal`/`-shm` → reopen and migrate
-  if the backup is older.
-* Single-question recovery uses revision history (§8); whole-database recovery
-  uses backups. On exit the WAL is checkpointed.
+Implemented (`db/backup.py`):
+
+* **Mechanism**: SQLite's online backup API (`Connection.backup`) — a
+  consistent snapshot even in WAL mode; the live file is never copied directly.
+* **When**: automatically before every migration of an existing database
+  (`pre-migration-v<N>`) and before every confirmed import (`pre-import`).
+  If the backup cannot be created and verified, the migration/import does not run.
+* **Verification**: written to `.partial`, switched to rollback-journal mode
+  (one self-contained file), reopened read-only, application id, schema
+  version, `PRAGMA integrity_check` and per-table row counts compared with the
+  source, then atomically renamed.
+* **Where**: `<data>/backups/vascqbank-<UTC timestamp>-<reason>.sqlite3` plus a
+  JSON manifest (SHA-256, size, schema version, row counts, database id).
+* **Retention**: the 20 most recent automatic backups are kept; manual ones
+  are never pruned.
+
+Design (later phase): manual "create backup now" / "save backup as…",
+start-up backup if the last one is older than 24 h, and **restore**: validate
+the chosen backup → safety backup of the current database → close
+connections → atomic replace → remove stale `-wal`/`-shm` → reopen and migrate.
 
 ## 11. Word and TXT export (design)
 
@@ -404,9 +415,12 @@ exported.
 | Architecture: layer rules, no networking, UTF-8 sources | `ast` scan | implemented |
 | Entry point: `--version`, `--self-check`, real GUI start/exit | subprocess | implemented |
 | GUI widgets and fonts | pytest-qt, offscreen platform | implemented |
-| Parsers, import report, round-trip export | pytest with synthetic Georgian fixtures in `tests/fixtures/` (never real questions) | Phase 2+ |
-| Revision/approval rules, triggers | pytest | Phase 2+ |
-| 10,000-record performance | `perf` marker, synthetic data | Phase 2–3 |
+| Parsers (both formats), validation catalogue, discovery | pytest, synthetic Georgian data generated by `tests/synthetic.py` (never real questions) | implemented |
+| Import service: dry run, commit, conflicts, rollback, races, triggers | pytest with temp databases | implemented |
+| Backups: verification, corruption, retention, pre-migration | pytest | implemented |
+| Import dialog | pytest-qt, offscreen | implemented |
+| 10,000-record performance | `perf` marker, synthetic data | implemented |
+| Revision/approval services, round-trip export | pytest | later phases |
 | Packaged builds | CI smoke run of the EXE/AppImage | packaging phase |
 
 Offscreen GUI tests verify widget structure and wiring; they are not a

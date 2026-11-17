@@ -81,3 +81,15 @@ def test_no_network_imports() -> None:
 def test_all_source_files_are_utf8() -> None:
     for path in PACKAGE_ROOT.rglob("*.py"):
         path.read_bytes().decode("utf-8")  # raises on any non-UTF-8 byte
+
+
+def test_only_the_repository_inserts_questions() -> None:
+    """Questions enter the database only through the import repository."""
+    allowed = {PACKAGE_ROOT / "db" / "question_repository.py"}
+    offenders = [
+        str(path.relative_to(PACKAGE_ROOT))
+        for path in PACKAGE_ROOT.rglob("*.py")
+        if path not in allowed
+        and "insert into questions" in " ".join(path.read_text(encoding="utf-8").lower().split())
+    ]
+    assert not offenders, offenders

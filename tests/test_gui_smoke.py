@@ -17,6 +17,7 @@ from PySide6.QtWidgets import QAbstractButton, QApplication, QLabel  # noqa: E40
 
 from vascqbank_desktop import __version__, resources  # noqa: E402
 from vascqbank_desktop.config.constants import APP_NAME_KA  # noqa: E402
+from vascqbank_desktop.db.migrations import LATEST_VERSION  # noqa: E402
 from vascqbank_desktop.domain.subjects import SUBJECTS  # noqa: E402
 from vascqbank_desktop.services.storage import initialize_storage  # noqa: E402
 from vascqbank_desktop.ui import strings  # noqa: E402
@@ -94,9 +95,10 @@ def test_twelve_subject_placeholders_are_not_interactive(window) -> None:
     assert window.sidebar.subject_area.findChildren(QAbstractButton) == []
 
 
-def test_no_visible_push_buttons_pretend_to_work(window) -> None:
+def test_only_working_buttons_are_visible(window) -> None:
+    """The only visible button on an empty database is the (working) import button."""
     visible_buttons = [b for b in window.findChildren(QAbstractButton) if b.isVisible()]
-    assert visible_buttons == []
+    assert visible_buttons == [window.welcome_view.import_button]
 
 
 def test_welcome_empty_state_and_real_storage_facts(window, app_paths) -> None:
@@ -104,7 +106,7 @@ def test_welcome_empty_state_and_real_storage_facts(window, app_paths) -> None:
     assert view.empty_title.text() == strings.EMPTY_TITLE
     assert view.storage_path_label.text() == str(app_paths.database_file)
     status_texts = [w.text() for w in window.statusBar().findChildren(QLabel)]
-    assert "სქემა v1" in status_texts
+    assert f"სქემა v{LATEST_VERSION}" in status_texts
     assert f"ვერსია {__version__}" in status_texts
 
 

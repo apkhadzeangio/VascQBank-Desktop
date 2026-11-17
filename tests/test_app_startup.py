@@ -14,6 +14,7 @@ import pytest
 from vascqbank_desktop import __version__
 from vascqbank_desktop.app import logging_setup
 from vascqbank_desktop.app.logging_setup import configure_logging
+from vascqbank_desktop.db.migrations import LATEST_VERSION
 
 
 def _run(*args: str, env_extra: dict[str, str] | None = None, timeout: int = 60):
@@ -41,7 +42,7 @@ def test_version_flag() -> None:
 def test_self_check_creates_and_reopens_database(data_dir: Path) -> None:
     first = _run("--self-check", "--data-dir", str(data_dir))
     assert first.returncode == 0, first.stderr
-    assert "schema_version:    1" in first.stdout
+    assert f"schema_version:    {LATEST_VERSION}" in first.stdout
     assert "created_new:       True" in first.stdout
     assert "integrity_ok:      True" in first.stdout
     assert (data_dir / "database" / "vascqbank.sqlite3").is_file()

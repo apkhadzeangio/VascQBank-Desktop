@@ -69,6 +69,11 @@ QWidget#Sidebar QLabel#SubjectItem {{
     color: {SIDEBAR_MUTED};
     padding: 4px 10px;
 }}
+QWidget#Sidebar QLabel#SubjectCount {{
+    color: #6F7B8D;
+    font-size: 8.5pt;
+    padding: 0 10px 4px 10px;
+}}
 QScrollArea#SubjectScroll QScrollBar:vertical {{
     background: transparent;
     width: 8px;
@@ -142,6 +147,76 @@ QLabel#StatusBad {{
 }}
 QLabel#RoadmapItem {{
     color: {TEXT_MUTED};
+}}
+QLabel#BankTotal {{
+    font-size: 13pt;
+    font-weight: 600;
+}}
+QPushButton#PrimaryButton, QPushButton#SecondaryButton {{
+    padding: 7px 18px;
+    border-radius: 6px;
+    font-weight: 600;
+}}
+QPushButton#PrimaryButton {{
+    background: {ACCENT};
+    color: #FFFFFF;
+    border: 1px solid {ACCENT};
+}}
+QPushButton#PrimaryButton:hover {{
+    background: #8E2443;
+}}
+QPushButton#PrimaryButton:disabled {{
+    background: #C9A3AE;
+    border-color: #C9A3AE;
+}}
+QPushButton#SecondaryButton {{
+    background: {CARD_BG};
+    color: {ACCENT};
+    border: 1px solid {ACCENT};
+}}
+QPushButton#SecondaryButton:hover {{
+    background: {ACCENT_SOFT};
+}}
+QPushButton#SecondaryButton:disabled {{
+    color: {TEXT_MUTED};
+    border-color: {BORDER};
+}}
+QTableWidget {{
+    background: {CARD_BG};
+    border: 1px solid {BORDER};
+    border-radius: 6px;
+    gridline-color: {BORDER};
+}}
+QHeaderView::section {{
+    background: {CONTENT_BG};
+    border: none;
+    border-bottom: 1px solid {BORDER};
+    padding: 5px 8px;
+    font-weight: 600;
+}}
+QLabel#SummaryNumber {{
+    font-size: 15pt;
+    font-weight: 700;
+}}
+QLabel#SummaryNumberGood {{
+    font-size: 15pt;
+    font-weight: 700;
+    color: {SUCCESS};
+}}
+QLabel#SummaryNumberBad {{
+    font-size: 15pt;
+    font-weight: 700;
+    color: {DANGER};
+}}
+QLabel#StepActive {{
+    color: {ACCENT};
+    font-weight: 700;
+}}
+QLabel#StepInactive {{
+    color: {TEXT_MUTED};
+}}
+QDialog {{
+    background: {CONTENT_BG};
 }}
 QStatusBar {{
     background: {CARD_BG};

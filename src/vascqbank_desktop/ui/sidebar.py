@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QIcon
@@ -25,6 +25,10 @@ SIDEBAR_WIDTH = 320
 
 # Page keys used by the navigation list and the main window's page stack.
 PAGE_HOME = "home"
+
+
+def _fmt(n: int) -> str:
+    return f"{n:,}".replace(",", "\u00a0")
 
 
 def _section_label(text: str) -> QLabel:
@@ -85,12 +89,29 @@ class Sidebar(QWidget):
         self.subject_area = self._build_subject_placeholders(subjects)
         layout.addWidget(self.subject_area, 1)
 
-        total = sum(s.target_count for s in subjects)
-        totals = QLabel(
-            strings.SUBJECTS_TOTAL.format(count=len(subjects), total=f"{total:,}".replace(",", " "))
+        self._subjects = tuple(subjects)
+        self.totals_label = QLabel()
+        self.totals_label.setObjectName("SidebarHint")
+        self.totals_label.setWordWrap(True)
+        layout.addWidget(self.totals_label)
+        self.set_counts({})
+
+    # -- counts -----------------------------------------------------------
+    def set_counts(self, imported: Mapping[str, int]) -> None:
+        """Show how many questions of each subject are in the database."""
+        for subject in self._subjects:
+            n = imported.get(subject.code, 0)
+            self.subject_count_labels[subject.code].setText(
+                strings.SUBJECT_COUNT.format(imported=_fmt(n), target=_fmt(subject.target_count))
+            )
+        total_target = sum(s.target_count for s in self._subjects)
+        self.totals_label.setText(
+            strings.SUBJECTS_TOTAL.format(
+                count=len(self._subjects),
+                imported=_fmt(sum(imported.values())),
+                total=_fmt(total_target),
+            )
         )
-        totals.setObjectName("SidebarHint")
-        layout.addWidget(totals)
 
     # -- construction helpers -------------------------------------------
     def _build_brand(self, app_icon: QIcon | None) -> QHBoxLayout:
@@ -136,18 +157,23 @@ class Sidebar(QWidget):
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(2)
         self.subject_labels: list[QLabel] = []
+        self.subject_count_labels: dict[str, QLabel] = {}
         for subject in subjects:
+            tooltip = strings.SUBJECT_TOOLTIP.format(
+                name=subject.name_ka, code=subject.code, target=subject.target_count
+            )
             label = QLabel(subject.name_ka)
             label.setObjectName("SubjectItem")
             label.setWordWrap(True)
             label.setProperty("subjectCode", subject.code)
-            label.setToolTip(
-                strings.SUBJECT_TOOLTIP.format(
-                    name=subject.name_ka, code=subject.code, target=subject.target_count
-                )
-            )
+            label.setToolTip(tooltip)
+            count = QLabel()
+            count.setObjectName("SubjectCount")
+            count.setToolTip(tooltip)
             column.addWidget(label)
+            column.addWidget(count)
             self.subject_labels.append(label)
+            self.subject_count_labels[subject.code] = count
         column.addStretch(1)
 
         area = QScrollArea()

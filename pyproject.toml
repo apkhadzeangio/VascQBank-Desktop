@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vascqbank-desktop"
-version = "0.1.0"
+version = "0.2.0"
 description = "VascQBank Review Desktop — offline desktop application for reviewing and approving Georgian vascular surgery exam questions"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -47,10 +47,15 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 
+[tool.ruff.lint.per-file-ignores]
+# the message catalogue is a table of full Georgian sentences
+"src/vascqbank_desktop/validation/issues.py" = ["E501"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
 qt_api = "pyside6"
 markers = [
     "gui: creates Qt widgets (runs on the offscreen Qt platform unless QT_QPA_PLATFORM is set)",
+    "perf: 10,000-question synthetic benchmark (deselect with -m 'not perf')",
 ]

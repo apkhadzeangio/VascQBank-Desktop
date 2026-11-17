@@ -12,10 +12,12 @@ and TXT files**.
 * The application **never generates questions**; it only works with imported ones.
 * The user interface is Georgian; code and technical documentation are English.
 
-> **Status: Phase 1 of 10 — foundation.** The window, navigation shell,
-> Georgian fonts, local storage and schema versioning work. Import, editing,
-> approval, history, backup and export are designed in
-> [ARCHITECTURE.md](ARCHITECTURE.md) and arrive in later phases.
+> **Status: Phase 2 of 10 — database and import.** Working: the full question
+> schema with integrity rules, import of paired TXT files and the refined
+> master (`REFINED_MASTER_QBANK.txt`) with a dry run, Georgian validation
+> report and confirmed import, verified automatic backups, and real question
+> counts in the window. Browsing, editing, approval and export arrive in later
+> phases (see [ARCHITECTURE.md](ARCHITECTURE.md)).
 
 ---
 
@@ -72,16 +74,35 @@ The data folder can also be set with the `VASCQBANK_DATA_DIR` environment variab
 | Windows | `%LOCALAPPDATA%\VascQBank-Desktop` |
 | Linux | `$XDG_DATA_HOME/vascqbank-desktop` (usually `~/.local/share/vascqbank-desktop`) |
 
-Inside: `database/vascqbank.sqlite3`, `backups/`, `exports/`, `logs/`.
+Inside: `database/vascqbank.sqlite3`, `backups/` (verified automatic backups
+before every import and migration, each with a JSON manifest), `exports/`, `logs/`.
 The menu **ფაილი → მონაცემთა საქაღალდის გახსნა** opens it.
 Do not place the data folder inside OneDrive/Dropbox/Google Drive sync folders
 while the application is running.
 
+## Importing questions
+
+**ფაილი → კითხვების იმპორტი…** (Ctrl+I) or the button on the home page:
+
+1. choose `<CODE>_questions.txt` / `<CODE>_explanations.txt` files, a folder
+   containing them, or `REFINED_MASTER_QBANK.txt`;
+2. **შემოწმება** validates everything without changing the database and lists
+   errors and warnings in Georgian;
+3. **იმპორტი (N კითხვა)** asks for confirmation, creates a verified backup and
+   adds only new questions, all as „განხილვის მოლოდინში“.
+
+Existing questions are never changed by an import. Use one source format per
+question ID — see ARCHITECTURE.md §7.1.
+
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest          # Windows: .venv\Scripts\python -m pytest
+.venv/bin/python -m pytest                 # all tests, incl. the 10,000-question benchmark
+.venv/bin/python -m pytest -m "not perf"   # skip the benchmark
+ruff check src tests
 ```
+
+Test data is synthetic (`tests/synthetic.py`); no real question content is used.
 
 GUI tests run on Qt's `offscreen` platform by default, so they also work
 without a display. To run them against a real desktop session, set
@@ -93,12 +114,12 @@ without a display. To run them against a real desktop session, set
 src/vascqbank_desktop/
 ├── app/           startup: arguments, logging, wiring
 ├── config/        constants and cross-platform paths
-├── domain/        subjects, answer letters ა–ე, review statuses, question IDs
-├── db/            SQLite connection policy, ownership check, migrations
-├── services/      use cases called by the UI (storage initialisation)
-├── validation/    Unicode/UTF-8 text normalisation
-├── importexport/  strict UTF-8 reading, atomic writing (parsers/exporters later)
-├── ui/            PySide6 widgets, Georgian strings, fonts, theme
+├── domain/        subjects, answer letters, statuses, question IDs, ImportedQuestion
+├── db/            SQLite policy, ownership check, migrations, schema, backups, repository
+├── services/      use cases: storage init, two-stage import, counts
+├── validation/    text normalisation, issue catalogue (Georgian), content rules
+├── importexport/  file discovery, paired-TXT and refined-master parsers, UTF-8 I/O
+├── ui/            PySide6 widgets, import dialog, worker thread, strings, theme
 └── resources/     bundled fonts (Noto Sans, Noto Sans Georgian) and icon
 tests/             pytest suite, incl. layer-boundary and offline checks
 ```

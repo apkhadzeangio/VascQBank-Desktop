@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 
 from vascqbank_desktop import __version__
 from vascqbank_desktop.config.constants import SQLITE_APPLICATION_ID
+from vascqbank_desktop.db import schema_v2
 from vascqbank_desktop.db.errors import MigrationError, SchemaTooNewError
 from vascqbank_desktop.db.identity import (
     ensure_owned_or_blank,
@@ -100,6 +101,7 @@ def _m0001_foundation(conn: sqlite3.Connection) -> None:
 
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "schema-version foundation", _m0001_foundation),
+    Migration(2, "questions, revisions, imports, review events, exports", schema_v2.apply),
 )
 
 LATEST_VERSION: int = MIGRATIONS[-1].version

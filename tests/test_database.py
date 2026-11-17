@@ -54,7 +54,7 @@ def test_new_database_is_migrated_to_latest(conn: sqlite3.Connection) -> None:
     assert conn.execute("PRAGMA application_id").fetchone()[0] == SQLITE_APPLICATION_ID
 
     rows = conn.execute("SELECT version, name, app_version FROM schema_migrations").fetchall()
-    assert [r["version"] for r in rows] == [1]
+    assert [r["version"] for r in rows] == [m.version for m in MIGRATIONS]
     meta = read_metadata(conn)
     assert set(meta) == {"database_id", "created_at", "created_by_app_version"}
     uuid.UUID(meta["database_id"])  # valid UUID
@@ -91,7 +91,9 @@ def test_tables_are_strict(conn: sqlite3.Connection) -> None:
     rows = conn.execute(
         "SELECT name, strict FROM pragma_table_list WHERE schema='main' AND name NOT LIKE 'sqlite_%'"
     ).fetchall()
-    assert {r["name"]: r["strict"] for r in rows} == {"schema_migrations": 1, "app_metadata": 1}
+    strict = {r["name"]: r["strict"] for r in rows}
+    assert {"schema_migrations", "app_metadata", "questions", "question_revisions"} <= set(strict)
+    assert all(strict.values()), strict
 
 
 def test_refuses_database_from_newer_app(db_path: Path) -> None:
@@ -159,15 +161,17 @@ def test_failed_migration_rolls_back(conn: sqlite3.Connection) -> None:
 
     migrate(conn)
     with pytest.raises(MigrationError):
-        migrate(conn, migrations=[*MIGRATIONS, Migration(2, "broken", broken)])
-    assert get_schema_version(conn) == 1
+        migrate(conn, migrations=[*MIGRATIONS, Migration(LATEST_VERSION + 1, "broken", broken)])
+    assert get_schema_version(conn) == LATEST_VERSION
     assert not conn.in_transaction
     assert conn.execute("SELECT count(*) FROM sqlite_schema WHERE name='half_done'").fetchone()[0] == 0
-    assert [r[0] for r in conn.execute("SELECT version FROM schema_migrations")] == [1]
+    assert [r[0] for r in conn.execute("SELECT version FROM schema_migrations")] == list(
+        range(1, LATEST_VERSION + 1)
+    )
 
 
 def test_migration_list_must_be_consecutive(conn: sqlite3.Connection) -> None:
-    gap = [*MIGRATIONS, Migration(3, "gap", lambda c: None)]
+    gap = [*MIGRATIONS, Migration(LATEST_VERSION + 2, "gap", lambda c: None)]
     with pytest.raises(ValueError):
         migrate(conn, migrations=gap)
 
@@ -198,3 +202,21 @@ def test_initialize_storage_end_to_end(app_paths: AppPaths) -> None:
     assert not second.created_new
     assert second.applied_migrations == ()
     assert second.database_id == first.database_id
+
+
+def test_every_foreign_key_column_is_indexed(conn: sqlite3.Connection) -> None:
+    """Unindexed FK child columns made the 10k import quadratic (27 s → 1 s once fixed)."""
+    migrate(conn)
+    tables = [r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+    missing = []
+    for table in tables:
+        indexed_first_columns = set()
+        for index in conn.execute(f"PRAGMA index_list('{table}')").fetchall():
+            cols = conn.execute(f"PRAGMA index_info('{index['name']}')").fetchall()
+            if cols:
+                indexed_first_columns.add(cols[0]["name"])
+        for fk in conn.execute(f"PRAGMA foreign_key_list('{table}')").fetchall():
+            if fk["from"] not in indexed_first_columns:
+                missing.append(f"{table}.{fk['from']}")
+    assert not missing, missing
