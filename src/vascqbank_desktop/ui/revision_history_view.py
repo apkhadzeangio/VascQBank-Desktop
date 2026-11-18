@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from vascqbank_desktop.domain.catalog import RevisionDetail, RevisionInfo
+from vascqbank_desktop.domain.editing import same_content
 from vascqbank_desktop.domain.textdiff import compare_contents
 from vascqbank_desktop.services.catalog_service import CatalogService
 from vascqbank_desktop.ui import strings
@@ -47,7 +48,10 @@ def revision_row_text(info: RevisionInfo) -> str:
     first = strings.HI_ROW.format(
         number=info.revision_no, author=info.author, time=format_timestamp(info.created_at)
     )
-    flags = [_ORIGINS.get(info.origin, info.origin)]
+    origin = _ORIGINS.get(info.origin, info.origin)
+    if info.origin == "RESTORE" and info.restored_from_revision_no is not None:
+        origin = strings.HI_ORIGIN_RESTORE_FROM.format(number=info.restored_from_revision_no)
+    flags = [origin]
     if info.is_current:
         flags.append(strings.HI_CURRENT)
     if info.was_approved:
@@ -59,6 +63,7 @@ def revision_row_text(info: RevisionInfo) -> str:
 
 class RevisionHistoryView(QWidget):
     backRequested = Signal()
+    restoreRequested = Signal(int, int)  # revision id, revision number — the controller decides
 
     def __init__(self, service: CatalogService, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -127,10 +132,17 @@ class RevisionHistoryView(QWidget):
             grid.addWidget(value, row, 1)
         column.addWidget(meta)
 
+        compare_row = QHBoxLayout()
         self.diff_check = QCheckBox(strings.HI_SHOW_DIFF)
         self.diff_check.setChecked(True)
         self.diff_check.toggled.connect(self._refresh_body)
-        column.addWidget(self.diff_check)
+        compare_row.addWidget(self.diff_check, 1)
+        self.restore_button = QPushButton(strings.HI_RESTORE)
+        self.restore_button.setObjectName("SecondaryButton")
+        self.restore_button.setToolTip(strings.HI_RESTORE_TOOLTIP)
+        self.restore_button.clicked.connect(self._request_restore)
+        compare_row.addWidget(self.restore_button)
+        column.addLayout(compare_row)
 
         self.stack = QStackedWidget()
         self.text_scroll = QScrollArea()
@@ -205,14 +217,41 @@ class RevisionHistoryView(QWidget):
             "revision": str(info.revision_no) + (f" ({strings.HI_CURRENT})" if info.is_current else ""),
             "author": info.author,
             "time": format_timestamp(info.created_at),
-            "origin": _ORIGINS.get(info.origin, info.origin),
+            "origin": strings.HI_ORIGIN_RESTORE_FROM.format(number=info.restored_from_revision_no)
+            if info.origin == "RESTORE" and info.restored_from_revision_no is not None
+            else _ORIGINS.get(info.origin, info.origin),
             "status": status + (f" · {strings.HI_APPROVED_MARK}" if info.was_approved else ""),
             "note": info.note or strings.HI_NO_NOTE,
         }
         for key, text in values.items():
             self.meta[key].set_content(text)
         self.diff_check.setEnabled(not info.is_current)
+        self._update_restore_button()
         self._refresh_body()
+
+    def _update_restore_button(self) -> None:
+        """Restoring needs an earlier revision whose text differs from the current one."""
+        detail, current = self._selected, self._current
+        if detail is None or current is None or detail.info.is_current:
+            self.restore_button.setEnabled(False)
+            self.restore_button.setToolTip(strings.HI_RESTORE_IS_CURRENT)
+        elif same_content(detail.content, current.content):
+            self.restore_button.setEnabled(False)
+            self.restore_button.setToolTip(strings.HI_RESTORE_SAME_TEXT)
+        else:
+            self.restore_button.setEnabled(True)
+            self.restore_button.setToolTip(strings.HI_RESTORE_TOOLTIP)
+
+    def _request_restore(self) -> None:
+        if self.restore_button.isEnabled() and self._selected is not None:
+            info = self._selected.info
+            self.restoreRequested.emit(info.id, info.revision_no)
+
+    def reload(self) -> None:
+        """Re-read the history of the same question (after a restore), selecting the newest revision."""
+        if self._question_id is not None:
+            uid = self.title_label.text().rsplit(" — ", 1)[-1]
+            self.show_history(self._question_id, uid)
 
     def _refresh_body(self) -> None:
         detail, current = self._selected, self._current

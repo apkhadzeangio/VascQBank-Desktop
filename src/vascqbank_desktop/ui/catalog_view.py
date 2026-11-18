@@ -50,6 +50,7 @@ from vascqbank_desktop.services.session_service import ContextNotice, RestoredCo
 from vascqbank_desktop.ui import strings
 from vascqbank_desktop.ui.autosave import DEFAULT_DELAY_MS, DEFAULT_RETRY_MS
 from vascqbank_desktop.ui.catalog_editing import EditingController, EditingServices
+from vascqbank_desktop.ui.catalog_workflow import WorkflowController
 from vascqbank_desktop.ui.formatting import format_count
 from vascqbank_desktop.ui.progress_panel import ProgressStrip
 from vascqbank_desktop.ui.question_delegate import QuestionDelegate
@@ -87,7 +88,7 @@ class CatalogView(QWidget):
     contextChanged = Signal(object, object, object)  # subject code, status, uid (each may be None)
     importRequested = Signal()
     editingChanged = Signal(bool)  # edit mode entered / left
-    questionSaved = Signal(object)  # SaveResult: a revision was committed (or confirmed unchanged)
+    questionSaved = Signal(object)  # SaveResult / ReviewResult: a revision or decision was committed
     draftsChanged = Signal(int)  # number of unfinished drafts
     reviewerRequired = Signal()  # the reviewer tried to edit without choosing a name
 
@@ -112,6 +113,9 @@ class CatalogView(QWidget):
             else None
         )
         self._subjects = {s.code: s for s in subjects}
+        self._workflow: WorkflowController | None = (
+            WorkflowController(self, editing) if editing is not None and editing.review is not None else None
+        )
         self._bank: BankCounts | None = None
         self._filter = CatalogFilter()
         self._current_id: int | None = None
@@ -303,6 +307,8 @@ class CatalogView(QWidget):
         column.addWidget(self.mode_stack, 1)
         if self._editing is not None:
             self._editing.install(bar, column, self.mode_stack)
+        if self._workflow is not None:
+            self._workflow.install(column)
         return panel
 
     # ------------------------------------------------------------------ public state
@@ -314,6 +320,15 @@ class CatalogView(QWidget):
     def editing(self) -> EditingController | None:
         """The editing behaviour, or ``None`` when this page was built without editing services."""
         return self._editing
+
+    @property
+    def workflow(self) -> WorkflowController | None:
+        """The approve / reject / reopen / restore behaviour, or ``None`` without a review service."""
+        return self._workflow
+
+    def refresh_workflow(self) -> None:
+        if self._workflow is not None:
+            self._workflow.refresh()
 
     @property
     def is_editing(self) -> bool:
@@ -367,6 +382,7 @@ class CatalogView(QWidget):
             self.detail_view.show_question(detail)
         if self._editing is not None:
             self._editing.refresh_draft_bar()
+        self.refresh_workflow()
 
     def after_saved(self, result: object) -> None:
         """A revision was committed: refresh the list (status and preview may have changed)."""
@@ -598,6 +614,7 @@ class CatalogView(QWidget):
         if self._editing is not None:
             self._editing.update_buttons()
             self._editing.refresh_draft_bar()
+        self.refresh_workflow()
         self.questionOpened.emit(detail.uid)
         self._emit_context()
         return True
@@ -686,8 +703,10 @@ class CatalogView(QWidget):
             repolish(self.goto_edit)
 
     # ------------------------------------------------------------------ notices
-    def show_notice(self, text: str, *, error: bool = False) -> None:
-        self.notice_label.setObjectName("ErrorNotice" if error else "InfoNotice")
+    def show_notice(self, text: str, *, error: bool = False, success: bool = False) -> None:
+        self.notice_label.setObjectName(
+            "ErrorNotice" if error else "SuccessNotice" if success else "InfoNotice"
+        )
         repolish(self.notice_label)
         self.notice_label.setText(text)
         self.notice_label.show()

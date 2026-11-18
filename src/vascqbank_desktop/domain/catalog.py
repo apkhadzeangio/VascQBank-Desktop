@@ -146,6 +146,7 @@ class RevisionInfo:
     from_status: ReviewStatus | None = None  # status change recorded with this revision, if any
     to_status: ReviewStatus | None = None
     event_note: str | None = None
+    restored_from_revision_no: int | None = None  # RESTORE: the revision whose text was copied
 
 
 @dataclass(frozen=True, slots=True)

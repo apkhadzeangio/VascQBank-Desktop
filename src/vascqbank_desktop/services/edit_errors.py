@@ -48,6 +48,39 @@ class EditConflict(EditError):
         super().__init__(f"question {question_id} was changed (revision {current_revision_no})")
 
 
+class InvalidTransition(EditError):
+    """The action is not allowed from the question's current status (e.g. approving a rejected
+    question, which must be reopened first)."""
+
+    def __init__(self, question_id: int, action: str, status: ReviewStatus) -> None:
+        self.question_id = question_id
+        self.action = action
+        self.status = status
+        super().__init__(f"{action} is not allowed on question {question_id} in status {status.value}")
+
+
+class ReasonRequired(EditError):
+    """Rejecting a question needs a written reason."""
+
+
+class UnresolvedDraft(EditError):
+    """The question has an unsaved draft that differs from its saved text.
+
+    Approving (or restoring over) would leave the reviewer unsure which text is meant, so the
+    caller must first save the draft, discard it, or — for a restore — explicitly keep it.
+    """
+
+    def __init__(self, question_id: int, saved_at: str, reviewer_name: str) -> None:
+        self.question_id = question_id
+        self.saved_at = saved_at
+        self.reviewer_name = reviewer_name
+        super().__init__(f"question {question_id} has an unresolved draft ({saved_at}, {reviewer_name})")
+
+
+class RestoreSourceInvalid(EditError):
+    """The revision to restore does not exist or belongs to another question."""
+
+
 class StorageProblem(StrEnum):
     DISK_FULL = "DISK_FULL"
     LOCKED = "LOCKED"  # another program or window holds the database

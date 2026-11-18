@@ -256,3 +256,19 @@ def revisions_of(paths: AppPaths, uid: str) -> list[dict]:
         ]
     finally:
         conn.close()
+
+
+def events_of(paths: AppPaths, uid: str) -> list[dict]:
+    """Every review event of a question, oldest first."""
+    conn = open_database(paths.database_file)
+    try:
+        return [
+            dict(r)
+            for r in conn.execute(
+                "SELECT e.* FROM review_events e JOIN questions q ON q.id = e.question_id "
+                "WHERE q.question_uid = ? ORDER BY e.id",
+                (uid,),
+            )
+        ]
+    finally:
+        conn.close()

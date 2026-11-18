@@ -146,7 +146,7 @@ class EditOptionRow(QFrame):
         return bool(self.property("correct"))
 
 
-def _storage_text(failure: StorageFailure) -> str:
+def storage_text(failure: StorageFailure) -> str:
     base = {
         StorageProblem.DISK_FULL: strings.ED_STORAGE_DISK_FULL,
         StorageProblem.LOCKED: strings.ED_STORAGE_LOCKED,
@@ -571,7 +571,7 @@ class QuestionEditorView(QWidget):
             return strings.ED_STATE_CONFLICT
         error = self._last_save_error or self._autosave.last_error
         if isinstance(error, StorageFailure):
-            detail = _storage_text(error) + strings.ED_STORAGE_RETAINED
+            detail = storage_text(error) + strings.ED_STORAGE_RETAINED
         else:
             detail = str(error or "")
         return strings.ED_STATE_ERROR.format(detail=detail)
@@ -837,7 +837,7 @@ class QuestionEditorView(QWidget):
             return True
         if not self._autosave.flush():
             error = self._autosave.last_error
-            detail = _storage_text(error) if isinstance(error, StorageFailure) else str(error or "")
+            detail = storage_text(error) if isinstance(error, StorageFailure) else str(error or "")
             if not self.ask_continue_without_saving(detail, closing=closing):
                 self._update_state()
                 return False

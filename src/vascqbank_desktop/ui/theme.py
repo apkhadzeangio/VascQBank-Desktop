@@ -59,6 +59,7 @@ def _status_chip_rules() -> str:
         for status, (fg, bg) in STATUS_COLORS.items()
     )
 
+
 STYLESHEET = f"""
 QMainWindow, QWidget#ContentArea {{
     background: {CONTENT_BG};
@@ -524,6 +525,48 @@ QPushButton#DangerButton:hover {{
 QPushButton#DangerButton:disabled {{
     color: {TEXT_MUTED};
     border-color: {BORDER};
+}}
+QPushButton#ApproveButton {{
+    padding: 7px 18px;
+    border-radius: 6px;
+    font-weight: 600;
+    background: {SUCCESS};
+    color: #FFFFFF;
+    border: 1px solid {SUCCESS};
+}}
+QPushButton#ApproveButton:hover {{
+    background: #266B43;
+}}
+QPushButton#ApproveButton:disabled {{
+    background: #A9C9B6;
+    border-color: #A9C9B6;
+}}
+QPushButton#ApproveOutlineButton {{
+    padding: 7px 18px;
+    border-radius: 6px;
+    font-weight: 600;
+    background: {CARD_BG};
+    color: {SUCCESS};
+    border: 1px solid {SUCCESS};
+}}
+QPushButton#ApproveOutlineButton:hover {{
+    background: #E6F4EB;
+}}
+QPushButton#ApproveOutlineButton:disabled {{
+    color: {TEXT_MUTED};
+    border-color: {BORDER};
+}}
+QLabel#SuccessNotice {{
+    background: #E6F4EB;
+    border: 1px solid #A9D3B8;
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: #1E5C3A;
+}}
+QFrame#WorkflowBar {{
+    background: {CARD_BG};
+    border: 1px solid {BORDER};
+    border-radius: 8px;
 }}
 QListWidget#RevisionList {{
     background: {CARD_BG};

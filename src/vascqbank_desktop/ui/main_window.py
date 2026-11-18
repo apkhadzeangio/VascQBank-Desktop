@@ -24,6 +24,7 @@ from vascqbank_desktop.services.catalog_service import CatalogService, SearchInd
 from vascqbank_desktop.services.draft_service import DraftService
 from vascqbank_desktop.services.edit_service import EditService
 from vascqbank_desktop.services.question_stats import BankCounts, bank_counts, summarize
+from vascqbank_desktop.services.review_service import ReviewService
 from vascqbank_desktop.services.session_service import restore_context
 from vascqbank_desktop.services.settings_service import ReviewerProfile, SavedSession, SettingsStore
 from vascqbank_desktop.services.storage import StorageStatus
@@ -74,6 +75,7 @@ class MainWindow(QMainWindow):
         self.catalog_service = CatalogService(self._paths)
         self.draft_service = DraftService(self._paths)
         self.edit_service = EditService(self._paths, self.reviewer_profile)
+        self.review_service = ReviewService(self._paths, self.reviewer_profile)
         self.index_status: SearchIndexStatus | None = None
         self._warmup_job: BackgroundJob | None = None
         self._warmup_again = False
@@ -97,7 +99,9 @@ class MainWindow(QMainWindow):
         self.catalog_view = CatalogView(
             self.catalog_service,
             subjects,
-            editing=EditingServices(self.edit_service, self.draft_service, self.reviewer_profile),
+            editing=EditingServices(
+                self.edit_service, self.draft_service, self.reviewer_profile, self.review_service
+            ),
             autosave_delay_ms=autosave_delay_ms,
         )
         self.backup_view = BackupView(self._paths)
@@ -358,9 +362,7 @@ class MainWindow(QMainWindow):
             strings.STATUS_REVIEWER.format(name=name) if name else strings.STATUS_REVIEWER_NONE
         )
         bar.addPermanentWidget(self.reviewer_label)
-        bar.addPermanentWidget(
-            QLabel(strings.STATUS_SCHEMA.format(version=self._status.schema_version))
-        )
+        bar.addPermanentWidget(QLabel(strings.STATUS_SCHEMA.format(version=self._status.schema_version)))
         bar.addPermanentWidget(QLabel(strings.STATUS_VERSION.format(version=__version__)))
 
     # -- actions ---------------------------------------------------------

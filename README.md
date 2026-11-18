@@ -12,14 +12,15 @@ and TXT files**.
 * The application **never generates questions**; it only works with imported ones.
 * The user interface is Georgian; code and technical documentation are English.
 
-> **Status: Phase 4 of 10 — professional question editor, autosave and crash
-> recovery.** Working: importing questions (Phase 2); browsing all 12 subjects,
+> **Status: Phase 5 of 10 — approval, rejection, reopening and revision
+> restoration.** Working: importing questions (Phase 2); browsing all 12 subjects,
 > full-text search, progress statistics, a local reviewer profile, session restore
-> and verified backups (Phase 3); and now **editing every part of a question**
-> (question, answers ა–ე, correct answer, explanation) with **autosaved drafts**,
-> an explicit **Ctrl+S** save that creates a new revision, **conflict detection**,
-> a **read-only revision history** with comparison, and **recovery of unfinished
-> drafts after a crash**. Approval, rejection and export arrive in later phases
+> and verified backups (Phase 3); editing every part of a question with autosaved
+> drafts, explicit saves, conflict detection, revision history and crash recovery
+> (Phase 4); and now the **complete editorial workflow**: **approve** the exact saved
+> revision (also *approve and next*), **reject** with a mandatory reason, **reopen**,
+> **restore an earlier revision** as a new one, live statistics, and a read-only
+> **export contract** for the Phase 6 DOCX/TXT exporter, which is the next phase
 > (see [ARCHITECTURE.md](ARCHITECTURE.md)).
 
 ---
@@ -131,12 +132,47 @@ question ID — see ARCHITECTURE.md §7.1.
   its time, type, size and verification result. Restoring is deliberately not
   offered yet. Take one before a long editing session.
 
+## Approval workflow (Phase 5)
+
+Each question shows only the actions its status allows:
+
+| Button | Shortcut | What it does |
+|---|---|---|
+| დამტკიცება და შემდეგი → | Ctrl+Enter | approves the displayed saved revision, then moves to the next question |
+| დამტკიცება | Ctrl+Shift+Enter | approves and stays |
+| უარყოფა | Ctrl+Shift+R | rejects; a written reason is mandatory |
+| ხელახლა გახსნა | Ctrl+Shift+O | reopens an approved or rejected question (confirmation, optional note) |
+| განხილვის დაწყება | — | pending → in review, without changing the text |
+| წინა რედაქციის დაბრუნება | Ctrl+Shift+B | in the history: restores the selected earlier revision as a new one |
+
+* **Approval is bound to one exact revision** and recorded in the append-only event log with
+  your name and the time. Nothing is approved merely because a draft was autosaved: if the
+  question has an unsaved draft the program asks you to open it first; if you approve while
+  editing, your text is saved as a new revision first and *that* revision is approved. If the
+  question changed elsewhere meanwhile you get a clear message and nothing is approved.
+* **Approve and next** moves on only after the approval is safely stored. Inside a status filter
+  it continues with the question that followed the approved one.
+* **Rejecting** keeps the question and its whole history in the database; an approved question
+  loses its approval. **Reopening** returns a question to *განხილვის პროცესში*; earlier approvals
+  stay in the history.
+* **Restoring** never changes or deletes an old revision: the old text is added as a new revision
+  (labelled *აღდგენა (რედაქცია N-დან)*). A restored previously-approved text is not approved
+  automatically; editing or restoring an approved question revokes its approval after a warning.
+  A draft is never lost by a restore — you choose to keep or discard it.
+* Counters on the catalog strip, home page and sidebar refresh after every decision; successful
+  decisions show a green message, failures a red one and change nothing.
+* **Export (Phase 6)** will read only the *approved revision* of approved questions through
+  `ApprovedQuestionsService`; drafts, pending, in-review, rejected questions and superseded
+  revisions can never be exported (ARCHITECTURE.md §19). There is no bulk approval.
+
 ### Screenshots
 
 Rendered from the real window with **synthetic** data (10,000 artificial questions) by
-`tools/capture_screenshots.py` and `tools/capture_screenshots_phase4.py`; see
-[docs/screenshots/phase3](docs/screenshots/phase3) and
-[docs/screenshots/phase4](docs/screenshots/phase4): home dashboard, catalog with the correct
+`tools/capture_screenshots.py`, `tools/capture_screenshots_phase4.py` and
+`tools/capture_screenshots_phase5.py`; see [docs/screenshots/phase3](docs/screenshots/phase3),
+[docs/screenshots/phase4](docs/screenshots/phase4) and
+[docs/screenshots/phase5](docs/screenshots/phase5) (workflow bar, approve, approve-and-next in a
+filter, reject and reopen dialogs, restore with a draft, the restored history): home dashboard, catalog with the correct
 answer highlighted, search results, backups, the reviewer profile, and (Phase 4) the editor,
 validation, the approved-question warning, a conflict, draft recovery, the draft list and the
 revision history with a comparison.
@@ -174,8 +210,8 @@ and press **რედაქტირება** (Ctrl+E).
   on the question that was open. Nothing is restored or deleted behind your back; drafts are
   never removed because a question is filtered out. A deliberate discard is archived.
 * **History** (Ctrl+H): every revision with editor, time, note and status change, its full text and
-  a comparison with the current version. History is append-only; restoring an old revision
-  comes in a later phase.
+  a comparison with the current version. History is append-only; an earlier revision can be
+  brought back as a **new** revision (see *Approval workflow* below).
 * **Limits**: the last second of typing before an abrupt stop can be lost (what is on disk is
   then the previous confirmed draft); nothing protects against disk failure — keep backups
   (*სარეზერვო ასლები*). Details: [ARCHITECTURE.md §17](ARCHITECTURE.md).
@@ -202,10 +238,10 @@ src/vascqbank_desktop/
 ├── config/        constants and cross-platform paths
 ├── domain/        subjects, answer letters, statuses, question IDs, ImportedQuestion
 ├── db/            SQLite policy, ownership check, migrations (schema v2, v3), backups, repositories, search index
-├── services/      use cases: storage init, import, counts, catalog/search, settings, session, backups, drafts, edits
+├── services/      use cases: storage init, import, counts, catalog/search, settings, session, backups, drafts, edits, review decisions, approved-text contract
 ├── validation/    text normalisation, issue catalogue (Georgian), content rules
 ├── importexport/  file discovery, paired-TXT and refined-master parsers, UTF-8 I/O
-├── ui/            PySide6 widgets: catalog, detail, editor, autosave, history, drafts, backups, reviewer, import; strings, theme, workers
+├── ui/            PySide6 widgets: catalog, detail, editor, autosave, workflow, history, drafts, backups, reviewer, import; strings, theme, workers
 └── resources/     bundled fonts (Noto Sans, Noto Sans Georgian) and icon
 tools/             capture_screenshots*.py — render the real window with synthetic data
 tests/             pytest suite, incl. layer-boundary, offline, crash-recovery (isolated SIGKILL children on temporary databases) and 10,000-question checks

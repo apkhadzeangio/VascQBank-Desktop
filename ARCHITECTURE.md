@@ -1,6 +1,6 @@
 # VascQBank Review Desktop — Architecture
 
-This document describes the architecture implemented in Phases 1–4 and the design
+This document describes the architecture implemented in Phases 1–5 and the design
 that later phases implement. Sections marked **(implemented)** describe code
 that exists and is tested; sections marked **(design)** are the plan.
 
@@ -43,11 +43,11 @@ that exists and is tested; sections marked **(design)** are the plan.
 | Package | Responsibility | Must not import |
 |---|---|---|
 | `config` | constants, cross-platform paths | Qt, sqlite3, any upper layer |
-| `domain` | subjects, answer letters ა–ე, review statuses and the edit transitions, question IDs, edit validation, word-level text diff | Qt, sqlite3, db, services, ui, app, importexport |
+| `domain` | subjects, answer letters ა–ე, review statuses, the editorial workflow state machine, question IDs, edit validation, word-level text diff | Qt, sqlite3, db, services, ui, app, importexport |
 | `validation` | text normalisation; later structural question checks | Qt, sqlite3, upper layers |
 | `importexport` | strict UTF-8 I/O; later TXT/master parsers, TXT/DOCX writers | Qt, ui, app |
-| `db` | connection policy, ownership check, migrations, repositories (questions, catalog, drafts, edits) | Qt, services, ui, app |
-| `services` | use cases (storage init, import, catalog/search, settings, session, backups, **drafts, edits**; later approve, export) | Qt, ui, app |
+| `db` | connection policy, ownership check, migrations, repositories (questions, catalog, drafts, edits, review decisions, approved text) | Qt, services, ui, app |
+| `services` | use cases (storage init, import, catalog/search, settings, session, backups, drafts, edits, **review decisions, approved-text contract**; later export) | Qt, ui, app |
 | `ui` | widgets, Georgian strings, fonts, theme | sqlite3, db, app |
 | `app` | entry point and composition root | — |
 
@@ -254,6 +254,24 @@ Query-plan tests assert index-ordered listing without a temporary sort, primary-
 lookups for a page and for a detail, and that a page of 100 rows costs exactly one
 `SELECT` and reads no revision history (no N+1 pattern).
 
+### Phase 5 — review decisions on 10,000 questions (measured)
+
+`tests/test_review_performance.py`, same synthetic bank with 2,021 questions approved by test
+set-up, `synchronous=FULL`, offscreen Qt, tmpfs-class disk (a real disk adds the `fsync` time).
+
+| Operation | Measured | Test budget |
+|---|---:|---:|
+| Approve one question · reopen it (service, one transaction) | 3.2 · 3.1 ms | < 100 ms |
+| *Approve and next* in the GUI inside a status filter (decision + list refresh + navigation; median / worst of 20) | 31 / 42 ms | < 250 / 600 ms |
+| Decision until the filtered list has settled | 18–21 ms | < 1000 ms |
+| Restore an earlier revision · read a 12-revision history | 3.5 · 0.8 ms | < 150 · 50 ms |
+| Progress statistics for the whole bank | 1.1 ms | < 100 ms |
+| Approved-question ids · count · one subject's snapshot (≈ 2,000 approved) | 3.2 · 2.4 · 2.8 ms | < 100 · 100 · 500 ms |
+| Full approved snapshot of 2,021 questions · export-contract check | 24.6 · 9.8 ms | < 1500 · 500 ms |
+
+Ordinary review work (decisions and navigation) reads **no revision history**: a test counts the
+calls of the history queries and requires zero.
+
 ### Phase 4 — editing in the 10,000-question catalog (measured)
 
 `tests/test_editing_performance.py`, the same synthetic 10,000 questions, offscreen Qt,
@@ -371,12 +389,12 @@ a folder → validation summary and issue table (errors first) → confirmation
 dialog → result (created, skipped, backup path, batch number). The sidebar and
 home page then show real per-subject and per-status counts.
 
-## 8. Editorial revision history (implemented — Phase 4; restore deferred)
+## 8. Editorial revision history (implemented — Phases 4 and 5)
 
 * Revisions are append-only; `questions.current_revision_id` points to the
   latest. Saving content identical to the current revision creates nothing.
-* **Restore** never rewrites history: it creates a new revision (`RESTORE`)
-  copying the chosen one and recording `restored_from_revision_id`.
+* **Restore** (implemented in Phase 5, §18.5) never rewrites history: it creates a new revision
+  (`RESTORE`) copying the chosen one and recording `restored_from_revision_id`.
 * **Optimistic concurrency**: a save carries the `lock_version` the editor
   loaded; `UPDATE … WHERE id=? AND lock_version=?` affecting 0 rows means
   the question changed meanwhile (second window or instance) and the user is
@@ -385,22 +403,26 @@ home page then show real per-subject and per-status counts.
   there is no login) and an optional note.
 * History view (implemented, `ui/revision_history_view.py`): read-only list of revisions
   (number, editor, time, origin, note, status change) with the full text of the selected
-  one and a word-level comparison with the current version (`domain/textdiff.py`). Restoring
-  an old revision stays deferred to a later phase; the format above is what it will use.
+  one and a word-level comparison with the current version (`domain/textdiff.py`). The history
+  has a **წინა რედაქციის დაბრუნება** button for the selected earlier revision (§18.5); restored
+  revisions are labelled *აღდგენა (რედაქცია N-დან)*.
 * The save itself is §17.4.
 
-## 9. Approval states (edit transitions implemented — Phase 4; approve/reject/reopen design)
+## 9. Approval states (implemented — Phases 4 and 5)
 
 Status codes and Georgian labels match the VascQBank-Review web application
 (implemented in `domain.review_status`).
 
 | From | Action | To | Rule |
 |---|---|---|---|
-| `PENDING_REVIEW` | first edit saved / "start review" | `IN_REVIEW` | |
-| `PENDING_REVIEW`, `IN_REVIEW` | approve | `APPROVED` | content must pass validation; `approved_revision_id = current_revision_id` |
-| `PENDING_REVIEW`, `IN_REVIEW`, `APPROVED` | reject (note required) | `REJECTED` | question stays in the database |
-| `APPROVED` | content edited | `IN_REVIEW` | approval is bound to an exact revision, so any edit revokes it |
-| `APPROVED`, `REJECTED` | reopen | `IN_REVIEW` | |
+| `PENDING_REVIEW` | first edit saved / `START_REVIEW` | `IN_REVIEW` | |
+| `PENDING_REVIEW`, `IN_REVIEW` | `APPROVE` | `APPROVED` | content must pass validation, no unresolved draft; `approved_revision_id = current_revision_id` |
+| `PENDING_REVIEW`, `IN_REVIEW`, `APPROVED` | `REJECT` (reason required) | `REJECTED` | question stays in the database; approval pointers cleared |
+| `APPROVED` | content edited or restored | `IN_REVIEW` | approval is bound to an exact revision, so any content change revokes it |
+| `APPROVED`, `REJECTED` | `REOPEN` | `IN_REVIEW` | approval pointers cleared; history kept |
+| `REJECTED` | content edited or restored | `REJECTED` | only an explicit reopen leaves `REJECTED` |
+
+The whole table is `domain/workflow.py` (pure rules); §18 describes how it is applied.
 
 Every transition writes a `review_events` row in the same transaction. Exports
 read `approved_revision_id`, so only the exact approved text can ever be
@@ -408,13 +430,12 @@ exported.
 
 **Implemented in Phase 4** (`domain.review_status.status_after_edit`): saving an edit moves
 `PENDING_REVIEW → IN_REVIEW`, keeps `IN_REVIEW`, keeps `REJECTED` (leaving it is the explicit
-*reopen* of a later phase) and moves `APPROVED → IN_REVIEW`. The last one **revokes the
+*reopen* of Phase 5, §18.4) and moves `APPROVED → IN_REVIEW`. The last one **revokes the
 approval**: the `questions` CHECK requires `approved_revision_id` and `approved_at` to be NULL
 unless the status is `APPROVED`, so both are cleared — the approved revision itself and its
 `APPROVE` event stay in the history, and the revoked revision number is written into the
 `EDITED` event's note. The editor warns before this happens and asks for confirmation.
-*Typing never changes a status*: only the committed save does. Approve, reject and reopen
-are not implemented yet.
+*Typing never changes a status*: only a committed save or decision does.
 
 ## 10. Local backup and recovery
 
@@ -519,7 +540,12 @@ connections → atomic replace → remove stale `-wal`/`-shm` → reopen and mig
 | Crash recovery: SIGKILL at exact SQL statements; whole GUI killed mid-edit | isolated child processes, temp databases only | implemented |
 | Autosaver (single flight, stale answers, flush, retry, close) · editor, history, drafts, main window | pytest-qt, offscreen | implemented |
 | Editing in a 10,000-question catalog | `perf` marker | implemented |
-| Approval services, round-trip export | pytest | later phases |
+| Review decisions: every rule, conflicts, drafts, rollback, original data, restore | pytest with temp databases | implemented |
+| Review decisions interrupted by SIGKILL (service level and whole GUI) | isolated child processes, temp databases only | implemented |
+| Workflow UI: bar, approve-and-next, filtered navigation, dialogs, shortcuts, statistics, restart | pytest-qt, offscreen | implemented |
+| Export contract (approved revision only, ordering, fingerprint, corruption detection) | pytest | implemented |
+| 10,000-question review benchmark | `perf` marker | implemented |
+| Round-trip export | pytest | Phase 6 |
 | Packaged builds | CI smoke run of the EXE/AppImage | packaging phase |
 
 Offscreen GUI tests verify widget structure and wiring; they are not a
@@ -862,21 +888,181 @@ Reviewed again after the heap corruption of Phase 3 (§15.3):
 | Two windows/instances edit the same question | optimistic `lock_version`; conflict dialog | none silently; the reviewer decides |
 | Draft written for an older revision | stores base revision and lock; flagged *outdated*; saving it conflicts | none silently |
 | Mistaken discard | confirmation; text archived in append-only `draft_discards` | recoverable by hand from the database |
-| Mistaken edit | every revision is kept; history view shows and compares them | restoring is by copying text until the restore feature exists |
+| Mistaken edit | every revision is kept; history view shows and compares them; **restore** appends the old text as a new revision (§18.5) | none for content; restore is explicit and confirmed |
 | Disk full / read-only / locked | Georgian error, text kept, retry, refuse to close silently | text only in memory while writing is impossible |
 | Disk failure, corruption, deleted folder | verified backups (§10) | the application cannot prevent this |
 
-## 18. Extension points for Phase 5 (approval, rejection, reopening, restore)
+## 18. Approval, rejection, reopening and restoration (implemented — Phase 5)
 
-* **Approval** is a new `services/review_service.py` using the same transaction pattern as
-  §17.4: check `lock_version`, set status and `approved_revision_id`/`approved_at`, append the
-  `APPROVE`/`REJECT`/`REOPEN` event, bump `lock_version`, commit. `tests/bank.py::approve` and
-  `set_status` show the exact writes and the invariants the triggers enforce. Content must pass
-  `validate_content` before approval; unresolved drafts of the question should be shown first.
-* **Restore of an old revision** creates a new revision with `origin = RESTORE` (§8) through the
-  same `edit_repository.append_edit`; the history view already lists and compares revisions.
-* **Export** reads `approved_revision_id` only (§9); drafts and `IN_REVIEW` text never reach it.
-* **Search** needs no change: the derived index detects new revisions (§15.2).
-* **Invariants to keep**: catalog code paths stay `query_only`; the UI never imports `db`;
-  Georgian text is preserved exactly; every write is a single transaction; "saved" is shown only
-  after the commit; drafts are never deleted implicitly; the unchanged-database snapshot tests.
+No migration was needed: schema v2 already has the `APPROVE`/`REJECT`/`REOPEN`/`START_REVIEW`/
+`RESTORE` event codes, `question_revisions.restored_from_revision_id` (with the CHECK
+`origin = 'RESTORE' ⇔ restored_from_revision_id IS NOT NULL`) and the `APPROVED ⇔ approval
+pointers` CHECK. The schema stays at version 3.
+
+### 18.1 Layers
+
+```
+ui/catalog_workflow.py  WorkflowController     buttons, dialogs, shortcuts, navigation, messages
+ui/workflow_widgets.py  WorkflowBar, ReasonDialog
+        │  (never touches SQLite)
+services/review_service.py   ReviewService      reviewer name, locking of the write, error mapping
+        │
+db/review_repository.py      apply_action()     ONE BEGIN IMMEDIATE transaction per decision
+db/edit_repository.py        append_edit()      restore = a revision with origin RESTORE
+domain/workflow.py                              the state machine (pure)
+db/approved_repository.py + services/approved_service.py   read-only export contract (§19)
+```
+
+### 18.2 Transaction boundaries
+
+Every decision is **one** `BEGIN IMMEDIATE … COMMIT` on its own `synchronous=FULL` connection;
+a success is reported to the user only after `COMMIT`, and any exception rolls everything back.
+
+`ReviewService.approve / reject / reopen / start_review` → `apply_action`:
+
+1. read the question and its current revision; wrong `lock_version` → `LockConflict`
+   (reported as `EditConflict`), nothing written;
+2. *repeat* (approve an already approved revision, start a review that is running) → commit
+   nothing: **no duplicate event, no lock bump**, `changed = False`;
+3. not allowed from this status (`domain.workflow`) → `InvalidTransition`;
+4. `APPROVE` only: the **authoritative saved text** must pass `validate_content`
+   (`ValidationFailed`) and the question must have **no unresolved draft** (`UnresolvedDraft`;
+   a draft that merely repeats the saved text is deleted with the approval);
+5. `UPDATE questions SET status, approved_revision_id, approved_at, lock_version = lock_version + 1,
+   modified_at WHERE id = ? AND lock_version = ?` — approval sets `approved_revision_id =
+   current_revision_id` and `approved_at`; reject and reopen clear both;
+6. `INSERT review_events` (`action`, `from_status`, `to_status`, `revision_id = current`, `actor`,
+   `note`), `COMMIT`.
+
+Content, revisions, the imported original and identity are not touched by these actions (the
+triggers would refuse it). Autosaving a draft never calls any of this: **a draft can never
+approve a question**.
+
+### 18.3 Approval and rejection rules
+
+* A reviewer name is required (`ReviewerProfile.require_name()`); without one nothing happens.
+* Approval is of the **revision the reviewer is looking at**: the UI passes the `lock_version` of
+  the displayed question, so a question changed elsewhere gives a Georgian conflict message and
+  reloads the screen instead of approving text that was never seen.
+* An unsaved draft blocks the approval (the dialog offers to open the draft in the editor);
+  approving while *editing* first asks to save the editor text as a new revision, saves it
+  explicitly (own validation, conflict and failure handling), and approves **that** revision. If
+  the save or the draft flush fails the approval does not run and the screen does not move.
+* Rejection needs a written reason (≤ 500 characters, one line), stored in the event; the
+  question and all revisions stay; an approved question loses its approval (the revoked revision
+  number is shown); a rejected question cannot be approved until it is reopened.
+* `START_REVIEW` (button *განხილვის დაწყება*) moves a pending question to review without
+  changing the text.
+
+### 18.4 Reopening
+
+`APPROVED`/`REJECTED` → `IN_REVIEW`, optional note, confirmation dialog; the approval pointers are
+cleared (the schema allows them only on an approved question) while every earlier `APPROVE` event
+and approved revision stays in the append-only history, so "what was approved when, by whom" is
+always answerable. Reopening a pending or in-review question is refused.
+
+### 18.5 Restoring an earlier revision
+
+`ReviewService.restore_revision(question_id, lock_version, source_revision_id, note, keep_draft)`:
+
+* the source must be a revision of the same question (`RestoreSourceInvalid` otherwise) and its
+  text must validate;
+* `append_edit(origin="RESTORE", restored_from_revision_id=source, event_action="RESTORE")` —
+  the same single transaction as a save: lock check, contiguous revision number, status rule
+  (§9: an approved question loses its approval; rejected stays rejected), `lock_version + 1`,
+  `RESTORE` event ("restored from revision N"), commit;
+* text identical to the **current** revision creates nothing (`created_revision = False`); the
+  history disables the button for the current revision and for revisions with the current text;
+* old revisions are never changed; restoring *previously approved* text produces an unapproved
+  new revision — approving again is an explicit decision;
+* an unsaved draft is **never deleted** by a restore: unless it equals the restored text the call
+  is refused (`UnresolvedDraft`) and the dialog makes the reviewer choose *keep the draft* (it
+  stays, flagged outdated, and saving it later goes through the normal conflict path) or
+  *discard it* (archived in `draft_discards`) or cancel.
+
+### 18.6 Conflict resolution
+
+All decisions use optimistic concurrency. On `EditConflict` nothing was written; the screen is
+reloaded so the reviewer sees the new text and status, a red notice names the revision now
+current, and the decision can be repeated deliberately. A second program window or instance
+behaves identically. A draft started on a revision that is still current is **not** treated as a
+conflict when only a status decision (approve/reject/reopen) moved the lock version since.
+
+### 18.7 The reviewer's interface
+
+| Control | Shortcut | Notes |
+|---|---|---|
+| დამტკიცება და შემდეგი → | Ctrl+Enter | approve, then move on only after the commit |
+| დამტკიცება | Ctrl+Shift+Enter | approve and stay |
+| უარყოფა | Ctrl+Shift+R | dialog, reason required |
+| ხელახლა გახსნა | Ctrl+Shift+O | confirmation, optional note |
+| განხილვის დაწყება | — | pending → in review |
+| წინა რედაქციის დაბრუნება | Ctrl+Shift+B | in the history, on the selected revision |
+
+Only the actions the displayed status allows are shown. After every committed decision the
+detail view, the list row and the progress counters (strip, home page, sidebar) refresh and a
+green success notice names the question; failures show a red notice and change nothing.
+
+**Approve and next**: the "next" question is taken from the list **before** the approval, so when
+the approved question leaves an active status filter the reviewer continues with the question
+that followed it (not the list's first); at the end of the list the screen stays and says so.
+It never navigates when the approval, the explicit save or the draft flush failed.
+
+### 18.8 Testing
+
+Domain table; 44 service tests (every rule, conflict, draft, rollback by sabotage trigger,
+original data intact); 17 SIGKILL tests on isolated child processes and 5 on the whole GUI
+(a killed approval/restore leaves the database exactly as it was and can be repeated); 47 + 6
+GUI tests (bar, approve-and-next, filtered navigation, editor flows, reject/reopen/restore
+dialogs, conflicts, Georgian messages, shortcuts, statistics, restart); the export contract;
+10,000-question benchmark (§6). Several tests were run against deliberately broken code to
+prove they can fail.
+
+## 19. The export contract for Phase 6 (read side implemented — Phase 5)
+
+The Phase 6 exporter gets its data **only** from `services/approved_service.ApprovedQuestionsService`
+(`db/approved_repository.py`, read-only SELECTs — tested to contain no write keyword):
+
+* `snapshot(subject_code=None)` — every approved question (or one subject's) in export order
+  (subject order, then source number), read in one consistent database snapshot, plus a
+  `fingerprint` (SHA-256 over `uid|revision_id|content_hash`) the export run can record in
+  `export_runs` and the manifest;
+* each `ApprovedQuestion` carries the immutable question ID (`uid`, `subject_code`,
+  `source_number`), the **approved revision** (`revision_id` = `questions.approved_revision_id`,
+  `revision_no`, `approved_at`, `approved_by`), the exact text, correct answer and explanation;
+* `get(uid)`, `approved_ids(subject)`, `count(subject)`, `counts_by_subject()`;
+* `verify()` — run before exporting: reports a state that must stop the export (an approved
+  question without an approved revision, an approved revision that is not the current one, an
+  unapproved question with approval pointers, no `APPROVE` event bound to the approved revision).
+
+**Eligibility rule** (`domain.workflow.is_exportable`): status `APPROVED` and an approved revision,
+always *that* revision. By construction of the queries the following can never be exported:
+unsaved drafts (the `drafts` table is never read), pending, in-review and rejected questions, and
+superseded revisions (an edit or restore revokes the approval first, so a revision that is not
+current can never be approved). Phase 6 must not add another path to question text.
+
+## 20. Remaining risks (Phase 5)
+
+* **Approval is a human decision on what is displayed.** The software guarantees that exactly
+  the displayed saved revision is approved (or a conflict), not that the text is medically
+  correct.
+* **No undo for a decision** other than the explicit reopen/restore — both leave history.
+* **Two programs on one database** are protected by `lock_version`, but only the single-window
+  behaviour is exercised in GUI tests.
+* **Rejection reasons are one line** (500 characters); long discussions belong in a later
+  comment feature (`COMMENT` events exist in the schema but are not used yet).
+* **The exporter is not written**: until Phase 6, approved text exists only in the database and
+  backups; take a backup before long sessions (§10).
+* The physical-disk and power-loss caveats of §17.3 apply unchanged: committed decisions are
+  durable (`synchronous=FULL`); nothing protects against disk failure.
+
+## 21. Extension points for Phase 6 (export)
+
+* Read through `ApprovedQuestionsService.snapshot()` (§19); run `verify()` first; record
+  `fingerprint`, `uid`s and `revision_id`s in the manifest and in `export_runs`; write files with
+  the existing atomic writer.
+* The **round-trip test** of §11 can seed a bank, approve questions through `ReviewService`, export,
+  re-import into a fresh database and compare content.
+* **Invariants to keep**: catalog and approved repositories stay read-only; the UI never imports
+  `db`; every write is a single transaction; "done" is shown only after the commit; drafts are never
+  deleted implicitly and never exported.

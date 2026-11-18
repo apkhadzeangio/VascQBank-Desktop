@@ -30,6 +30,7 @@ from vascqbank_desktop.domain.textdiff import compare_contents
 from vascqbank_desktop.services.draft_service import DiscardReason, DraftService
 from vascqbank_desktop.services.edit_errors import ReviewerRequired, StorageFailure
 from vascqbank_desktop.services.edit_service import EditService, SaveResult
+from vascqbank_desktop.services.review_service import ReviewService
 from vascqbank_desktop.services.settings_service import ReviewerProfile
 from vascqbank_desktop.ui import strings
 from vascqbank_desktop.ui.autosave import DEFAULT_DELAY_MS, DEFAULT_RETRY_MS
@@ -49,6 +50,7 @@ class EditingServices:
     edit: EditService
     drafts: DraftService
     profile: ReviewerProfile
+    review: ReviewService | None = None  # approve / reject / reopen / restore (Phase 5)
 
 
 class EditMode(StrEnum):
@@ -139,6 +141,7 @@ class EditingController:
         editing_before = self.mode is EditMode.EDIT
         self.mode = mode
         self.update_buttons()
+        self.view.refresh_workflow()
         if (mode is EditMode.EDIT) != editing_before:
             self.view.editingChanged.emit(mode is EditMode.EDIT)
 
@@ -186,8 +189,12 @@ class EditingController:
                 current_revision_no=detail.revision_no,
                 initial_content=detail.content,
             )
+        base_lock = draft.base_lock_version
         if draft.base_revision_id == detail.revision_id:
             base_content, base_no = detail.content, detail.revision_no
+            # Same text as when the draft began: only a status decision (approve, reject, reopen)
+            # can have moved the lock version since, and that must not look like a conflict.
+            base_lock = detail.lock_version
         else:  # the draft started from an older revision: measure it against that one
             revision = self.view.service.revision(draft.base_revision_id)
             if revision is None:
@@ -199,7 +206,7 @@ class EditingController:
             subject_name=detail.subject_name_ka,
             base_revision_id=draft.base_revision_id,
             base_revision_no=base_no,
-            base_lock_version=draft.base_lock_version,
+            base_lock_version=base_lock,
             base_content=base_content,
             status=detail.status,
             current_revision_no=detail.revision_no,

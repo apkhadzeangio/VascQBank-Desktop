@@ -1,17 +1,19 @@
-"""The authoritative write path for editing: appending a revision.
+"""The authoritative write path for content changes: appending a revision.
 
-:func:`append_edit` is the only place that adds an ``EDIT`` revision. It runs as **one**
+:func:`append_edit` is the only place that adds a revision after the import (an ``EDIT``, or a
+``RESTORE`` of an earlier revision's text). It runs as **one**
 ``BEGIN IMMEDIATE … COMMIT`` transaction:
 
 1. read the question and its current revision;
 2. refuse if ``lock_version`` differs from the one the editor started from
    (:class:`LockConflict`) — nothing is changed;
 3. if the normalised content equals the current revision, create nothing;
-4. otherwise append the revision (next contiguous number, origin ``EDIT``), point
+4. otherwise append the revision (next contiguous number, origin ``EDIT`` — or ``RESTORE`` with
+   ``restored_from_revision_id``), point
    ``current_revision_id`` at it, apply the status rule (``status_after_edit``; an approved
    question loses its approval because it was bound to the previous revision), bump
    ``lock_version`` and ``modified_at``;
-5. append the ``EDITED`` review event;
+5. append the ``EDITED`` (or ``RESTORE``) review event;
 6. remove the draft of this question **if it holds exactly the text just saved**;
 7. commit. Any failure rolls everything back (including the draft deletion).
 
@@ -63,6 +65,16 @@ class LockConflict(Exception):
         )
 
 
+class DraftPending(Exception):
+    """A different, unsaved draft of the question exists and the caller asked not to bypass it."""
+
+    def __init__(self, question_id: int, saved_at: str, reviewer_name: str) -> None:
+        self.question_id = question_id
+        self.saved_at = saved_at
+        self.reviewer_name = reviewer_name
+        super().__init__(f"question {question_id} has an unresolved draft saved at {saved_at}")
+
+
 @dataclass(frozen=True, slots=True)
 class EditOutcome:
     created: bool  # a new revision was appended
@@ -78,7 +90,7 @@ class EditOutcome:
     draft_cleared: bool
 
 
-_CURRENT_SQL = """
+CURRENT_SQL = """
 SELECT q.status, q.lock_version, q.current_revision_id, q.approved_revision_id, q.modified_at,
        r.revision_no, r.stem, r.option_a, r.option_b, r.option_c, r.option_d, r.option_e,
        r.correct_letter, r.explanation
@@ -102,6 +114,26 @@ def _clear_matching_draft(conn: sqlite3.Connection, question_id: int, saved: Que
     return True
 
 
+def row_content(row: sqlite3.Row | tuple) -> QuestionContent:
+    """The content columns of a ``CURRENT_SQL`` row (positions 6–13)."""
+    return QuestionContent(row[6], tuple(row[7:12]), AnswerLetter.from_letter(row[12]), row[13])
+
+
+def pending_draft(
+    conn: sqlite3.Connection, question_id: int, saved: QuestionContent
+) -> tuple[str, str] | None:
+    """``(saved_at, reviewer)`` of a draft that differs from *saved*, else ``None``."""
+    row = conn.execute(
+        "SELECT stem, option_a, option_b, option_c, option_d, option_e, correct_letter, explanation,"
+        " saved_at, reviewer_name FROM drafts WHERE question_id = ?",
+        (question_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    draft = QuestionContent(row[0], tuple(row[1:6]), AnswerLetter.from_letter(row[6]), row[7])
+    return None if same_content(draft, saved) else (row[8], row[9])
+
+
 def append_edit(
     conn: sqlite3.Connection,
     *,
@@ -112,12 +144,23 @@ def append_edit(
     note: str | None,
     event_note: str | None,
     now: str,
+    origin: str = "EDIT",
+    restored_from_revision_id: int | None = None,
+    event_action: str = "EDITED",
+    refuse_pending_draft: bool = False,
 ) -> EditOutcome:
-    """Save *content* as the next revision of a question (see the module docstring)."""
+    """Save *content* as the next revision of a question (see the module docstring).
+
+    ``origin="RESTORE"`` (with ``restored_from_revision_id`` and ``event_action="RESTORE"``)
+    appends an earlier revision's text as a new revision. ``refuse_pending_draft`` raises
+    :class:`DraftPending` — before anything is written — if the question has an unsaved draft
+    that differs from the text being saved; the draft itself is never deleted by this call
+    unless it holds exactly the saved text.
+    """
     content = normalize_content(content)
     conn.execute("BEGIN IMMEDIATE")
     try:
-        row = conn.execute(_CURRENT_SQL, (question_id,)).fetchone()
+        row = conn.execute(CURRENT_SQL, (question_id,)).fetchone()
         if row is None:
             raise QuestionMissing(question_id)
         status_before = ReviewStatus(row[0])
@@ -133,7 +176,7 @@ def append_edit(
                 status_before,
             )
 
-        current = QuestionContent(row[6], tuple(row[7:12]), AnswerLetter.from_letter(row[12]), row[13])
+        current = row_content(row)
         if same_content(current, content):
             cleared = _clear_matching_draft(conn, question_id, content)
             conn.execute("COMMIT")
@@ -151,6 +194,11 @@ def append_edit(
                 draft_cleared=cleared,
             )
 
+        if refuse_pending_draft:
+            pending = pending_draft(conn, question_id, content)
+            if pending is not None:
+                raise DraftPending(question_id, pending[0], pending[1])
+
         next_no = int(
             conn.execute(
                 "SELECT COALESCE(MAX(revision_no), 0) + 1 FROM question_revisions WHERE question_id = ?",
@@ -160,9 +208,9 @@ def append_edit(
         cursor = conn.execute(
             """
             INSERT INTO question_revisions (question_id, revision_no, stem, option_a, option_b, option_c,
-                option_d, option_e, correct_letter, explanation, origin, author, note, content_hash,
-                created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'EDIT', ?, ?, ?, ?)
+                option_d, option_e, correct_letter, explanation, origin, restored_from_revision_id,
+                author, note, content_hash, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 question_id,
@@ -171,6 +219,8 @@ def append_edit(
                 *content.options,
                 content.correct.value,
                 content.explanation,
+                origin,
+                restored_from_revision_id,
                 author,
                 note,
                 content.content_hash(),
@@ -207,10 +257,11 @@ def append_edit(
             """
             INSERT INTO review_events (question_id, action, from_status, to_status, revision_id, actor, note,
                                        created_at)
-            VALUES (?, 'EDITED', ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 question_id,
+                event_action,
                 status_before.value,
                 status_after.value,
                 new_revision_id,

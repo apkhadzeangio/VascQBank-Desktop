@@ -103,9 +103,7 @@ ABOUT_TEXT: Final = (
 
 # Startup errors
 STARTUP_ERROR_TITLE: Final = "პროგრამის გაშვება ვერ მოხერხდა"
-STARTUP_ERROR_TEXT: Final = (
-    "მონაცემთა ბაზის გახსნა ან მომზადება ვერ მოხერხდა. მონაცემები არ შეცვლილა."
-)
+STARTUP_ERROR_TEXT: Final = "მონაცემთა ბაზის გახსნა ან მომზადება ვერ მოხერხდა. მონაცემები არ შეცვლილა."
 
 # Import dialog
 IMP_TITLE: Final = "კითხვების იმპორტი"
@@ -432,8 +430,7 @@ ED_REVERT_TEXT: Final = (
 )
 ED_FLUSH_FAILED_TITLE: Final = "მონახაზი ვერ შეინახა"
 ED_FLUSH_FAILED_TEXT: Final = (
-    "თქვენი ბოლო ცვლილებები ვერ ჩაიწერა ({detail}). თუ გააგრძელებთ, ეს ტექსტი დაიკარგება. "
-    "გავაგრძელოთ მაინც?"
+    "თქვენი ბოლო ცვლილებები ვერ ჩაიწერა ({detail}). თუ გააგრძელებთ, ეს ტექსტი დაიკარგება. გავაგრძელოთ მაინც?"
 )
 ED_CLOSE_FAILED_TEXT: Final = (
     "თქვენი ბოლო ცვლილებები ვერ ჩაიწერა ({detail}). თუ პროგრამას ახლა დახურავთ, ეს ტექსტი "
@@ -488,12 +485,105 @@ HI_SHOW_DIFF: Final = "შედარება მიმდინარე ვ�
 HI_SAME_AS_CURRENT: Final = "ეს მიმდინარე რედაქციაა"
 HI_NO_DIFFERENCES: Final = "ტექსტი მიმდინარე ვერსიას ემთხვევა"
 HI_READ_ONLY: Final = (
-    "ისტორია მხოლოდ საკითხავია: რედაქციები არასდროს იცვლება. ძველი რედაქციის აღდგენა "
-    "მომდევნო ეტაპზე დაემატება."
+    "ისტორია არასდროს იცვლება: ძველი რედაქციის დაბრუნება ქმნის ახალ რედაქციას, "
+    "არსებულებს კი არ ცვლის და არ შლის."
 )
+HI_RESTORE: Final = "წინა რედაქციის დაბრუნება"
+HI_RESTORE_TOOLTIP: Final = "ამ რედაქციის ტექსტი ახალ რედაქციად შეინახება (Ctrl+Shift+B)"
+HI_RESTORE_IS_CURRENT: Final = "ეს მიმდინარე რედაქციაა — დასაბრუნებელი არაფერია"
+HI_RESTORE_SAME_TEXT: Final = "ტექსტი მიმდინარე რედაქციის იდენტურია — ახალი რედაქცია არ შეიქმნება"
+HI_ORIGIN_RESTORE_FROM: Final = "აღდგენა (რედაქცია {number}-დან)"
 DIFF_LEGEND: Final = "წაშლილი ტექსტი · დამატებული ტექსტი"
 DIFF_UNCHANGED_FIELDS: Final = "უცვლელი ველები: {fields}"
 DIFF_OLD_TITLE: Final = "{title} (ძველი)"
 DIFF_COMPARE_TITLE: Final = "ვერსიების შედარება"
 DIFF_FIELD_CORRECT: Final = "სწორი პასუხი"
 DR_MARKER: Final = "მონახაზი"
+
+
+# Editorial workflow (Phase 5): approve, reject, reopen, restore
+WF_APPROVE: Final = "დამტკიცება"
+WF_APPROVE_NEXT: Final = "დამტკიცება და შემდეგი →"
+WF_REJECT: Final = "უარყოფა"
+WF_REOPEN: Final = "ხელახლა გახსნა"
+WF_START: Final = "განხილვის დაწყება"
+WF_APPROVE_TOOLTIP: Final = "ამტკიცებს ახლა ნაჩვენებ შენახულ რედაქციას (Ctrl+Shift+Enter)"
+WF_APPROVE_NEXT_TOOLTIP: Final = (
+    "ამტკიცებს ახლა ნაჩვენებ შენახულ რედაქციას და წარმატებული ჩაწერის შემდეგ გადადის "
+    "შემდეგ კითხვაზე (Ctrl+Enter)"
+)
+WF_REJECT_TOOLTIP: Final = "კითხვა უარყოფილი გახდება; მიზეზი სავალდებულოა (Ctrl+Shift+R)"
+WF_REOPEN_TOOLTIP: Final = "დამტკიცებულ ან უარყოფილ კითხვას აბრუნებს განხილვაში (Ctrl+Shift+O)"
+WF_START_TOOLTIP: Final = "კითხვის სტატუსს „განხილვის პროცესში“ ხდის ტექსტის შეცვლის გარეშე"
+
+WF_OK_APPROVED: Final = "✓ დამტკიცებულია — რედაქცია {number}"
+WF_OK_ALREADY_APPROVED: Final = "ეს რედაქცია უკვე დამტკიცებულია — არაფერი შეცვლილა"
+WF_OK_REJECTED: Final = "✓ კითხვა უარყოფილია"
+WF_OK_REJECTED_REVOKED: Final = "✓ კითხვა უარყოფილია; რედაქცია {number}-ის დამტკიცება გაუქმდა"
+WF_OK_REOPENED: Final = "✓ კითხვა ხელახლა გაიხსნა — სტატუსი: განხილვის პროცესში"
+WF_OK_STARTED: Final = "✓ განხილვა დაიწყო"
+WF_OK_ALREADY_STARTED: Final = "განხილვა უკვე დაწყებულია"
+WF_OK_RESTORED: Final = "✓ რედაქცია {source}-ის ტექსტი დაბრუნდა — ახალი რედაქცია {number}"
+WF_OK_RESTORED_REVOKED: Final = (
+    "✓ რედაქცია {source}-ის ტექსტი დაბრუნდა — ახალი რედაქცია {number}; დამტკიცება გაუქმდა, "
+    "კითხვა ისევ განხილვაშია"
+)
+WF_OK_RESTORE_SAME: Final = "ეს ტექსტი უკვე მიმდინარე რედაქციაა — ახალი რედაქცია არ შექმნილა"
+WF_LAST_QUESTION: Final = "ეს სიის ბოლო კითხვა იყო — შემდეგი კითხვა აღარ არის"
+WF_NEXT_NOT_POSSIBLE: Final = "შემდეგ კითხვაზე გადასვლა ვერ მოხერხდა — ტექსტი რედაქტორშია დარჩენილი"
+
+WF_ERR_PREFIX: Final = "✗ "
+WF_ERR_INVALID: Final = "ეს მოქმედება სტატუსზე „{status}“ შეუძლებელია"
+WF_ERR_REASON: Final = "უარყოფისთვის მიზეზის მითითება სავალდებულოა"
+WF_ERR_CONFLICT: Final = (
+    "კითხვა სხვაგან შეიცვალა (ახლა რედაქცია {current}, სტატუსი „{status}“). ეკრანი განახლდა — "
+    "გადახედეთ ახალ ტექსტს და გაიმეორეთ მოქმედება. არაფერი ჩაწერილა."
+)
+WF_ERR_VALIDATION: Final = "შენახული ტექსტი ვერ გაიარა შემოწმება, ამიტომ არ დამტკიცდა: {details}"
+WF_ERR_MISSING: Final = "კითხვა ბაზაში აღარ მოიძებნა"
+WF_ERR_NO_SOURCE: Final = "დასაბრუნებელი რედაქცია ამ კითხვას არ ეკუთვნის ან აღარ მოიძებნა"
+WF_ERR_STORAGE: Final = "ჩაწერა ვერ მოხერხდა — {detail}. არაფერი შეცვლილა."
+
+WF_DRAFT_TITLE: Final = "დაუსრულებელი მონახაზი"
+WF_DRAFT_TEXT: Final = (
+    "ამ კითხვას აქვს მონახაზი ({reviewer}, {time}), რომელიც შენახული რედაქცია არ არის. "
+    "დამტკიცება მხოლოდ შენახულ ტექსტს ეხება, ამიტომ ჯერ გახსენით მონახაზი რედაქტორში და "
+    "შეინახეთ ან გააუქმეთ — წინააღმდეგ შემთხვევაში შეიძლება არასწორი ტექსტი დამტკიცდეს."
+)
+WF_DRAFT_OPEN: Final = "მონახაზის გახსნა რედაქტორში"
+WF_DRAFT_CANCEL: Final = "გაუქმება"
+
+WF_SAVE_APPROVE_TITLE: Final = "შენახვა და დამტკიცება"
+WF_SAVE_APPROVE_TEXT: Final = (
+    "რედაქტორში შეუნახავი ცვლილებებია. ჯერ ისინი ახალ რედაქციად შეინახება, შემდეგ "
+    "სწორედ ეს რედაქცია დამტკიცდება."
+)
+WF_SAVE_APPROVE_BUTTON: Final = "შენახვა და დამტკიცება"
+
+WF_REJECT_TITLE: Final = "კითხვის უარყოფა"
+WF_REJECT_INTRO: Final = "მიუთითეთ უარყოფის მიზეზი (სავალდებულოა). კითხვა და მისი ისტორია ბაზაში დარჩება."
+WF_REJECT_APPROVED_WARNING: Final = "კითხვა დამტკიცებულია — უარყოფისას დამტკიცება გაუქმდება."
+WF_REJECT_CONFIRM: Final = "უარყოფა"
+WF_REASON_PLACEHOLDER: Final = "მიზეზი…"
+WF_REASON_REQUIRED: Final = "მიზეზი სავალდებულოა"
+WF_REOPEN_TITLE: Final = "კითხვის ხელახლა გახსნა"
+WF_REOPEN_INTRO_APPROVED: Final = (
+    "კითხვა დამტკიცებულია. ხელახლა გახსნისას დამტკიცება გაუქმდება და სტატუსი გახდება "
+    "„განხილვის პროცესში“; ისტორია შენარჩუნდება. შენიშვნა (არასავალდებულო):"
+)
+WF_REOPEN_INTRO_REJECTED: Final = (
+    "კითხვა უარყოფილია. ხელახლა გახსნისას სტატუსი გახდება „განხილვის პროცესში“. შენიშვნა (არასავალდებულო):"
+)
+WF_REOPEN_CONFIRM: Final = "ხელახლა გახსნა"
+WF_CANCEL: Final = "გაუქმება"
+
+WF_RESTORE_TITLE: Final = "წინა რედაქციის დაბრუნება"
+WF_RESTORE_TEXT: Final = (
+    "რედაქცია {source}-ის ტექსტი შეინახება როგორც ახალი რედაქცია (№{new}). არსებული რედაქციები "
+    "არ შეიცვლება და არ წაიშლება."
+)
+WF_RESTORE_APPROVED_WARNING: Final = "კითხვა დამტკიცებულია — ტექსტის შეცვლისას დამტკიცება გაუქმდება."
+WF_RESTORE_DRAFT: Final = "ამ კითხვას აქვს დაუსრულებელი მონახაზი ({reviewer}, {time}). არჩიეთ, რა ვუყოთ მას."
+WF_RESTORE_KEEP_DRAFT: Final = "დაბრუნება, მონახაზის დატოვებით"
+WF_RESTORE_DISCARD_DRAFT: Final = "მონახაზის გაუქმება და დაბრუნება"
+WF_RESTORE_CONFIRM: Final = "დაბრუნება"

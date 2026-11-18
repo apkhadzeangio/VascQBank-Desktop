@@ -318,10 +318,11 @@ _REVISION_INFO_SQL = """
 SELECT r.id, r.question_id, r.revision_no, r.origin, r.author, r.note, r.created_at,
        r.id = q.current_revision_id,
        EXISTS (SELECT 1 FROM review_events a WHERE a.revision_id = r.id AND a.action = 'APPROVE'),
-       e.from_status, e.to_status, e.note
+       e.from_status, e.to_status, e.note, src.revision_no
 FROM question_revisions r
 JOIN questions q ON q.id = r.question_id
-LEFT JOIN review_events e ON e.revision_id = r.id AND e.action = 'EDITED'
+LEFT JOIN review_events e ON e.revision_id = r.id AND e.action IN ('EDITED', 'RESTORE')
+LEFT JOIN question_revisions src ON src.id = r.restored_from_revision_id
 """
 
 
@@ -339,6 +340,7 @@ def _revision_info(row: sqlite3.Row) -> RevisionInfo:
         from_status=ReviewStatus(row[9]) if row[9] else None,
         to_status=ReviewStatus(row[10]) if row[10] else None,
         event_note=row[11],
+        restored_from_revision_no=int(row[12]) if row[12] is not None else None,
     )
 
 
