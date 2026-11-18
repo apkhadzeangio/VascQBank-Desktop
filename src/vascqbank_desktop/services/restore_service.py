@@ -58,6 +58,7 @@ from vascqbank_desktop.config.paths import AppPaths
 from vascqbank_desktop.db import backup as backup_db
 from vascqbank_desktop.db.connection import open_database
 from vascqbank_desktop.db.migrations import LATEST_VERSION
+from vascqbank_desktop.db.schema_check import schema_differences
 from vascqbank_desktop.domain.review_status import ReviewStatus
 from vascqbank_desktop.services.seed_service import sha256_file
 from vascqbank_desktop.services.storage import StorageStatus, initialize_storage
@@ -90,6 +91,7 @@ class RestoreProblem(StrEnum):
     FOREIGN_KEYS = "FOREIGN_KEYS"
     SCHEMA_UNSUPPORTED = "SCHEMA_UNSUPPORTED"
     COUNTS_MISMATCH = "COUNTS_MISMATCH"
+    SCHEMA_TAMPERED = "SCHEMA_TAMPERED"  # Phase 9b: objects our migrations never create (or missing)
     CHANGED_SINCE_CHECK = "CHANGED_SINCE_CHECK"
     DATABASE_BUSY = "DATABASE_BUSY"
     SAFETY_BACKUP_FAILED = "SAFETY_BACKUP_FAILED"
@@ -164,6 +166,11 @@ def _database_facts(conn: sqlite3.Connection) -> tuple[int, str, dict[str, int]]
         raise RestoreRefused(
             RestoreProblem.SCHEMA_UNSUPPORTED, f"schema version {version}, supported 1..{LATEST_VERSION}"
         )
+    # Phase 9b: a consistent file can still carry a trigger, view or index we never created (a trigger
+    # would run inside the program's own transactions after the restore) or lack a CHECK / FK.
+    tampered = schema_differences(conn, version)
+    if tampered:
+        raise RestoreRefused(RestoreProblem.SCHEMA_TAMPERED, "; ".join(tampered))
     database_id = ""
     if _table_exists(conn, "app_metadata"):
         row = conn.execute("SELECT value FROM app_metadata WHERE key = 'database_id'").fetchone()

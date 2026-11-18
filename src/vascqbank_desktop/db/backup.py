@@ -32,6 +32,7 @@ from pathlib import Path
 from vascqbank_desktop import __version__
 from vascqbank_desktop.config.constants import SQLITE_APPLICATION_ID
 from vascqbank_desktop.db.errors import DatabaseError
+from vascqbank_desktop.db.schema_check import schema_differences
 
 AUTOMATIC_REASONS = ("pre-import", "pre-migration")
 KEEP_AUTOMATIC = 20
@@ -46,6 +47,11 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 class BackupError(DatabaseError):
     """A backup could not be created or failed verification."""
+
+
+class BackupSchemaMismatch(BackupError):
+    """The backup is a consistent database, but its schema is not exactly the one our migrations
+    create for its version (an extra trigger, view or index, a removed CHECK or foreign key)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +92,9 @@ def verify_backup(path: Path) -> tuple[int, str, dict[str, int]]:
         if result != ["ok"]:
             raise BackupError("Backup failed integrity_check: " + "; ".join(result[:5]))
         version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        tampered = schema_differences(conn, version)
+        if tampered:
+            raise BackupSchemaMismatch("Backup schema differs from the application's: " + "; ".join(tampered))
         database_id = ""
         if conn.execute("SELECT 1 FROM sqlite_schema WHERE name='app_metadata'").fetchone():
             row = conn.execute("SELECT value FROM app_metadata WHERE key='database_id'").fetchone()
@@ -234,6 +243,7 @@ class BackupProblem(StrEnum):
     UNREADABLE = "UNREADABLE"  # not a valid database, or integrity_check failed
     COUNTS_MISMATCH = "COUNTS_MISMATCH"
     MANIFEST_INVALID = "MANIFEST_INVALID"  # the manifest lacks a valid size / SHA-256 (Phase 9)
+    SCHEMA_MISMATCH = "SCHEMA_MISMATCH"  # objects our migrations never create, or missing ones (Phase 9b)
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,6 +332,8 @@ def check_backup_file(path: Path) -> BackupCheck:
                     BackupProblem.CHECKSUM_MISMATCH, "SHA-256 differs from the manifest", has_manifest=True
                 )
         version, _database_id, counts = verify_backup(path)
+    except BackupSchemaMismatch as exc:
+        return _failure(BackupProblem.SCHEMA_MISMATCH, str(exc), has_manifest=has_manifest)
     except (BackupError, OSError) as exc:
         return _failure(BackupProblem.UNREADABLE, str(exc), has_manifest=has_manifest)
     if manifest is not None and manifest.get("table_counts") not in (None, counts):

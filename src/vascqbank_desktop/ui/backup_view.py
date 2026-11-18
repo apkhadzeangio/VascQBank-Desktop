@@ -61,6 +61,7 @@ _PROBLEM_LABELS: dict[BackupProblem, str] = {
     BackupProblem.UNREADABLE: strings.BK_PROBLEM_UNREADABLE,
     BackupProblem.COUNTS_MISMATCH: strings.BK_PROBLEM_COUNTS_MISMATCH,
     BackupProblem.MANIFEST_INVALID: strings.BK_PROBLEM_MANIFEST_INVALID,
+    BackupProblem.SCHEMA_MISMATCH: strings.BK_PROBLEM_SCHEMA_MISMATCH,
 }
 
 

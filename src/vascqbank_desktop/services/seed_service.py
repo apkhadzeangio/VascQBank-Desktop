@@ -36,6 +36,7 @@ from vascqbank_desktop import __version__
 from vascqbank_desktop.config.constants import SQLITE_APPLICATION_ID
 from vascqbank_desktop.config.paths import AppPaths
 from vascqbank_desktop.db.migrations import LATEST_VERSION, utc_now_iso
+from vascqbank_desktop.db.schema_check import schema_differences
 from vascqbank_desktop.domain.subjects import SUBJECTS, TOTAL_TARGET_QUESTIONS
 
 log = logging.getLogger(__name__)
@@ -231,6 +232,8 @@ def inspect_database(path: Path) -> dict:
             "integrity_check": "ok" if integrity == ["ok"] else "; ".join(integrity[:5]),
             "foreign_key_check": "ok" if not fk else f"{len(fk)} violation(s)",
             "tables": sorted(tables),
+            # Phase 9b: anything our migrations would not have created (or a missing object)
+            "schema_differences": schema_differences(conn, version),
         }
         if "questions" not in tables:
             return facts
@@ -318,6 +321,8 @@ def verify_seed(directory: Path, *, require_production: bool = False) -> Verifie
             f"schema {facts['schema_version']} (manifest {manifest.schema_version}, "
             f"supported ≤ {LATEST_VERSION})",
         )
+    if facts["schema_differences"]:
+        raise SeedInvalid(SeedProblem.SCHEMA_MISMATCH, "; ".join(facts["schema_differences"]))
     if facts["integrity_check"] != "ok" or facts["foreign_key_check"] != "ok":
         raise SeedInvalid(SeedProblem.INTEGRITY, f"{facts['integrity_check']}; {facts['foreign_key_check']}")
     if facts.get("database_id") != manifest.seed_database_id:
