@@ -21,7 +21,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QShortcut
 from PySide6.QtWidgets import QHBoxLayout, QMessageBox, QPushButton, QStackedWidget, QVBoxLayout
 
 from vascqbank_desktop.domain.catalog import QuestionDetail
@@ -36,6 +36,7 @@ from vascqbank_desktop.ui import strings
 from vascqbank_desktop.ui.autosave import DEFAULT_DELAY_MS, DEFAULT_RETRY_MS
 from vascqbank_desktop.ui.diff_view import CompareDialog
 from vascqbank_desktop.ui.draft_widgets import DraftBanner, DraftBar, DraftListDialog
+from vascqbank_desktop.ui.keys import key
 from vascqbank_desktop.ui.question_editor_view import EditSession, QuestionEditorView
 from vascqbank_desktop.ui.revision_history_view import RevisionHistoryView
 
@@ -107,10 +108,10 @@ class EditingController:
         self.draft_bar.discardRequested.connect(self._discard_draft_of_current)
         self.banner.openListRequested.connect(self.open_draft_list)
 
-        shortcut = QShortcut(QKeySequence("Ctrl+E"), view)
+        shortcut = QShortcut(key("Ctrl+E"), view)
         shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         shortcut.activated.connect(self.start_editing)
-        history_shortcut = QShortcut(QKeySequence("Ctrl+H"), view)
+        history_shortcut = QShortcut(key("Ctrl+H"), view)
         history_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         history_shortcut.activated.connect(self.show_history)
         self._shortcuts = [shortcut, history_shortcut]

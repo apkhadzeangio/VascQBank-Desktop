@@ -36,6 +36,9 @@ class StorageStatus:
     seed_version: str | None = None
     seed_kind: str | None = None
     seed_installed_at: str | None = None
+    # set when this database was restored from a backup (Phase 8)
+    restored_from: str | None = None
+    restored_at: str | None = None
 
     @property
     def from_development_seed(self) -> bool:
@@ -85,6 +88,8 @@ def initialize_storage(paths: AppPaths) -> StorageStatus:
             seed_version=metadata.get("seed_version"),
             seed_kind=metadata.get("seed_kind"),
             seed_installed_at=metadata.get("seed_installed_at"),
+            restored_from=metadata.get("restored_from_backup"),
+            restored_at=metadata.get("restored_at"),
         )
     finally:
         conn.close()

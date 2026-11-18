@@ -16,6 +16,7 @@ class SubjectCounts:
     code: str
     total: int = 0
     by_status: dict[ReviewStatus, int] = field(default_factory=dict)
+    drafts: int = 0  # questions with an unfinished draft
 
     def count(self, status: ReviewStatus) -> int:
         return self.by_status.get(status, 0)
@@ -32,6 +33,10 @@ class BankCounts:
     def total_with(self, status: ReviewStatus) -> int:
         return sum(s.count(status) for s in self.subjects.values())
 
+    @property
+    def total_drafts(self) -> int:
+        return sum(s.drafts for s in self.subjects.values())
+
 
 @dataclass(frozen=True, slots=True)
 class ProgressSummary:
@@ -39,6 +44,7 @@ class ProgressSummary:
 
     total: int
     by_status: dict[ReviewStatus, int]
+    drafts: int = 0
 
     def count(self, status: ReviewStatus) -> int:
         return self.by_status.get(status, 0)
@@ -52,19 +58,22 @@ class ProgressSummary:
 def summarize(bank: BankCounts, subject_code: str | None = None) -> ProgressSummary:
     """Progress for *subject_code*, or for the whole bank when it is ``None``."""
     if subject_code is None:
-        return ProgressSummary(bank.total, {s: bank.total_with(s) for s in ReviewStatus})
+        return ProgressSummary(bank.total, {s: bank.total_with(s) for s in ReviewStatus}, bank.total_drafts)
     counts = bank.subjects.get(subject_code, SubjectCounts(subject_code))
-    return ProgressSummary(counts.total, {s: counts.count(s) for s in ReviewStatus})
+    return ProgressSummary(counts.total, {s: counts.count(s) for s in ReviewStatus}, counts.drafts)
 
 
 def bank_counts(paths: AppPaths) -> BankCounts:
     conn = open_database(paths.database_file)
     try:
         raw = repo.count_by_subject_and_status(conn)
+        drafts = repo.count_drafts_by_subject(conn)
     finally:
         conn.close()
     subjects: dict[str, SubjectCounts] = {}
     for subject in SUBJECTS:
         statuses = {ReviewStatus(k): v for k, v in raw.get(subject.code, {}).items()}
-        subjects[subject.code] = SubjectCounts(subject.code, sum(statuses.values()), statuses)
+        subjects[subject.code] = SubjectCounts(
+            subject.code, sum(statuses.values()), statuses, drafts.get(subject.code, 0)
+        )
     return BankCounts(subjects)

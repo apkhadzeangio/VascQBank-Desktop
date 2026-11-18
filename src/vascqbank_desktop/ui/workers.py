@@ -164,6 +164,13 @@ class LatestOnlyRunner(QObject):
         if pending is not None and not self._closed:
             self._start(*pending)
 
+    def wait_idle(self, wait_ms: int = 30_000) -> bool:
+        """Drop waiting requests and block until the running call has returned (its handler still
+        runs later, so it must check a generation counter). The runner stays usable."""
+        self._pending = None
+        job = self._job
+        return job is None or job.wait(wait_ms)
+
     def shutdown(self, wait_ms: int = 30_000) -> None:
         """Drop waiting requests and wait for the running one; no handler runs afterwards."""
         self._closed = True

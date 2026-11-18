@@ -80,6 +80,17 @@ def count_by_subject_and_status(conn: sqlite3.Connection) -> dict[str, dict[str,
     return counts
 
 
+def count_drafts_by_subject(conn: sqlite3.Connection) -> dict[str, int]:
+    """Unfinished drafts per subject (a draft exists only for questions in the database)."""
+    if conn.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='drafts'").fetchone() is None:
+        return {}
+    rows = conn.execute(
+        "SELECT q.subject_code, count(*) FROM drafts d JOIN questions q ON q.id = d.question_id "
+        "GROUP BY q.subject_code"
+    )
+    return {code: int(n) for code, n in rows}
+
+
 def _next_id(conn: sqlite3.Connection, table: str) -> int:
     return int(conn.execute(f"SELECT COALESCE(max(id), 0) + 1 FROM {table}").fetchone()[0])
 

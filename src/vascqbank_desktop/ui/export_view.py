@@ -564,6 +564,11 @@ class ExportView(QWidget):
         self.shutdown()
         return True
 
+    def wait_idle(self) -> None:
+        """Let a running preview computation finish (before the database is replaced)."""
+        self._preview_timer.stop()
+        self._runner.wait_idle()
+
     def shutdown(self, timeout_ms: int = 60_000) -> None:
         """Cancel a running export and wait until its worker has cleaned up."""
         self._preview_timer.stop()

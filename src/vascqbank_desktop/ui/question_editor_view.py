@@ -22,7 +22,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -71,6 +71,7 @@ from vascqbank_desktop.ui.autosave import (
     DraftWrite,
 )
 from vascqbank_desktop.ui.formatting import format_clock
+from vascqbank_desktop.ui.keys import key
 from vascqbank_desktop.ui.text_edit import AutoGrowTextEdit
 from vascqbank_desktop.ui.widgets import make_label, repolish
 
@@ -360,8 +361,8 @@ class QuestionEditorView(QWidget):
         bindings: list[tuple[str, object]] = [("Ctrl+S", self.save), ("Esc", self.cancel)]
         bindings += [(f"Ctrl+{n}", lambda i=n - 1: self.select_correct(i)) for n in range(1, 6)]
         self._shortcuts: list[QShortcut] = []
-        for key, handler in bindings:
-            shortcut = QShortcut(QKeySequence(key), self)
+        for keys, handler in bindings:
+            shortcut = QShortcut(key(keys), self)
             shortcut.setContext(context)
             shortcut.activated.connect(handler)  # type: ignore[arg-type]
             self._shortcuts.append(shortcut)

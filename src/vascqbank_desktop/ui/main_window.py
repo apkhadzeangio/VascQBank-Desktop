@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from pathlib import Path
 
 from PySide6.QtCore import QTimer, QUrl
-from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QIcon, QKeySequence
+from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -25,6 +26,7 @@ from vascqbank_desktop.services.draft_service import DraftService
 from vascqbank_desktop.services.edit_service import EditService
 from vascqbank_desktop.services.export_service import ExportService
 from vascqbank_desktop.services.question_stats import BankCounts, bank_counts, summarize
+from vascqbank_desktop.services.restore_service import RestoreResult
 from vascqbank_desktop.services.review_service import ReviewService
 from vascqbank_desktop.services.session_service import restore_context
 from vascqbank_desktop.services.settings_service import ReviewerProfile, SavedSession, SettingsStore
@@ -34,9 +36,13 @@ from vascqbank_desktop.ui.autosave import DEFAULT_DELAY_MS
 from vascqbank_desktop.ui.backup_view import BackupView
 from vascqbank_desktop.ui.catalog_editing import EditingServices
 from vascqbank_desktop.ui.catalog_view import CatalogView
+from vascqbank_desktop.ui.compare_dialog import CompareDialog
 from vascqbank_desktop.ui.export_view import ExportView
 from vascqbank_desktop.ui.import_dialog import ImportDialog
+from vascqbank_desktop.ui.keys import key
+from vascqbank_desktop.ui.restore_dialog import RestoreDialog
 from vascqbank_desktop.ui.reviewer_view import ReviewerView
+from vascqbank_desktop.ui.shortcuts_dialog import ShortcutsDialog
 from vascqbank_desktop.ui.sidebar import (
     PAGE_BACKUPS,
     PAGE_CATALOG,
@@ -143,6 +149,7 @@ class MainWindow(QMainWindow):
         self.catalog_view.questionSaved.connect(lambda _result: self.refresh_counts())
         self.catalog_view.draftsChanged.connect(self._on_drafts_changed)
         self.catalog_view.reviewerRequired.connect(lambda: self.show_page(PAGE_REVIEWER))
+        self.backup_view.restoreRequested.connect(self.open_restore_dialog)
         self.reviewer_view.reviewerChanged.connect(self._on_reviewer_changed)
         self._build_menus()
         self._build_status_bar()
@@ -162,6 +169,7 @@ class MainWindow(QMainWindow):
         self.sidebar.set_counts({code: s.total for code, s in counts.subjects.items()})
         with_questions = sum(1 for s in counts.subjects.values() if s.total)
         self.welcome_view.set_bank_counts(counts.total, with_questions)
+        self.welcome_view.set_subject_counts(counts)
         self.catalog_view.set_counts(counts)
         self._update_progress(self.catalog_view.current_filter.subject_code)
         self.bank_label.setText(strings.STATUS_BANK.format(total=counts.total))
@@ -192,6 +200,68 @@ class MainWindow(QMainWindow):
         self.catalog_view.refresh()
         self._start_index_warmup()
 
+    # -- restoring a backup ------------------------------------------------------
+    def prepare_for_restore(self) -> str | None:
+        """Make sure nothing in this window uses the database; a message means "not now"."""
+        if self.export_view.is_running():
+            return strings.RS_BLOCKED_EXPORT
+        if self.backup_view.is_creating():
+            return strings.RS_BLOCKED_BACKUP
+        if not self.catalog_view.leave_editing():
+            return strings.RS_BLOCKED_DRAFT
+        self._flush_session()
+        self.catalog_view.wait_idle()
+        self.export_view.wait_idle()
+        self.wait_for_background_work()
+        return None
+
+    def create_restore_dialog(self, preselect: object = None) -> RestoreDialog:
+        counts = self._counts
+        return RestoreDialog(
+            self._paths,
+            current=self._status,
+            current_counts=(counts.total, counts.total_with(ReviewStatus.APPROVED)) if counts else None,
+            preselect=preselect if isinstance(preselect, Path) else None,
+            before_restore=self.prepare_for_restore,
+            parent=self,
+        )
+
+    def open_restore_dialog(self, preselect: object = None) -> RestoreResult | None:
+        dialog = self.create_restore_dialog(preselect)
+        dialog.exec()
+        result = dialog.result_value
+        failed = dialog.error is not None
+        dialog.deleteLater()
+        if result is not None:
+            self.apply_restore(result)
+        elif failed:  # the database is as before, but a safety backup may have been added
+            self.backup_view.refresh(auto_verify=False)
+        return result
+
+    def apply_restore(self, result: RestoreResult) -> None:
+        """Show the restored database everywhere (only called after it was reopened and verified)."""
+        self.reload_database(result.status)
+        safety = result.safety_backup.name if result.safety_backup else "—"
+        message = strings.BK_RESTORED.format(name=result.summary.path.name, safety=safety)
+        self.backup_view.refresh(auto_verify=False)
+        if result.safety_backup is not None:
+            self.backup_view.select_backup(result.safety_backup.name)
+        self.backup_view.show_message(message)
+        self.statusBar().showMessage(message, 15_000)
+
+    def reload_database(self, status: StorageStatus) -> None:
+        """Refresh every page from the (replaced) working database."""
+        self._status = status
+        self.welcome_view.set_status(status)
+        self.seed_label.setVisible(status.from_development_seed)
+        self.schema_label.setText(strings.STATUS_SCHEMA.format(version=status.schema_version))
+        self.refresh_counts()
+        saved = self.settings_store.load().session
+        self.catalog_view.reload_after_restore(restore_context(self.catalog_service, saved))
+        self._on_drafts_changed(self.draft_service.count())
+        self.export_view.request_preview()
+        self._start_index_warmup()
+
     # -- pages -----------------------------------------------------------
     def _add_page(self, key: str, widget: QWidget) -> None:
         self._page_index[key] = self.pages.addWidget(widget)
@@ -204,6 +274,8 @@ class MainWindow(QMainWindow):
             self.catalog_view.flush_editor_draft()  # leaving the page persists the pending draft
         self.pages.setCurrentIndex(index)
         self.sidebar.select_page(key)
+        if key == PAGE_CATALOG:
+            self.catalog_view.focus_content()  # so its keyboard shortcuts work at once
         if key == PAGE_BACKUPS:
             self.backup_view.refresh()
         elif key == PAGE_EXPORT:
@@ -217,6 +289,8 @@ class MainWindow(QMainWindow):
         self.catalog_view.open_draft_list()
 
     def _on_drafts_changed(self, count: int) -> None:
+        if self._counts is not None and count != self._counts.total_drafts:
+            self.refresh_counts()  # a draft appeared or disappeared: per-subject draft counts changed
         self.drafts_label.setText(strings.STATUS_DRAFTS.format(count=count))
         self.drafts_label.setVisible(count > 0)
         self.welcome_view.set_drafts(count)
@@ -302,22 +376,28 @@ class MainWindow(QMainWindow):
         file_menu = self.menuBar().addMenu(strings.MENU_FILE)
 
         self.action_import = QAction(strings.ACTION_IMPORT, self)
-        self.action_import.setShortcut(QKeySequence("Ctrl+I"))
+        self.action_import.setShortcut(key("Ctrl+I"))
         self.action_import.triggered.connect(self.open_import_dialog)
         file_menu.addAction(self.action_import)
 
         self.action_open_data_dir = QAction(strings.ACTION_OPEN_DATA_DIR, self)
         self.action_open_data_dir.triggered.connect(self._open_data_dir)
         file_menu.addAction(self.action_open_data_dir)
+        self.action_restore = QAction(strings.ACTION_RESTORE, self)
+        self.action_restore.triggered.connect(lambda: self.open_restore_dialog(None))
+        file_menu.addAction(self.action_restore)
+        self.action_compare = QAction(strings.ACTION_COMPARE, self)
+        self.action_compare.triggered.connect(self.open_compare_dialog)
+        file_menu.addAction(self.action_compare)
         self.action_export = QAction(strings.ACTION_EXPORT, self)
-        self.action_export.setShortcut(QKeySequence("Ctrl+Shift+E"))
+        self.action_export.setShortcut(key("Ctrl+Shift+E"))
         self.action_export.triggered.connect(lambda: self.show_page(PAGE_EXPORT))
         file_menu.addAction(self.action_export)
         file_menu.addSeparator()
 
         self.action_quit = QAction(strings.ACTION_QUIT, self)
         # StandardKey.Quit is empty on Windows, so set Ctrl+Q explicitly.
-        self.action_quit.setShortcut(QKeySequence("Ctrl+Q"))
+        self.action_quit.setShortcut(key("Ctrl+Q"))
         self.action_quit.triggered.connect(self.close)
         file_menu.addAction(self.action_quit)
 
@@ -341,6 +421,9 @@ class MainWindow(QMainWindow):
         self.action_drafts.triggered.connect(self.open_draft_list)
         questions_menu.addAction(self.action_drafts)
         questions_menu.addSeparator()
+        self.action_focus_list = self._catalog_action(
+            questions_menu, strings.ACTION_FOCUS_LIST, "Ctrl+L", self.catalog_view.focus_list
+        )
         self.action_previous = self._catalog_action(
             questions_menu, strings.ACTION_PREVIOUS, "Alt+Left", self.catalog_view.previous_question
         )
@@ -349,6 +432,10 @@ class MainWindow(QMainWindow):
         )
 
         help_menu = self.menuBar().addMenu(strings.MENU_HELP)
+        self.action_shortcuts = QAction(strings.ACTION_SHORTCUTS, self)
+        self.action_shortcuts.setShortcut(key("F1"))
+        self.action_shortcuts.triggered.connect(self.show_shortcuts)
+        help_menu.addAction(self.action_shortcuts)
         self.action_about = QAction(strings.ACTION_ABOUT, self)
         self.action_about.triggered.connect(self._show_about)
         help_menu.addAction(self.action_about)
@@ -356,7 +443,7 @@ class MainWindow(QMainWindow):
     def _catalog_action(self, menu, title: str, shortcut: str | None, handler) -> QAction:  # noqa: ANN001
         action = QAction(title, self)
         if shortcut:
-            action.setShortcut(QKeySequence(shortcut))
+            action.setShortcut(key(shortcut))
 
         def run() -> None:
             self.show_page(PAGE_CATALOG)
@@ -384,7 +471,8 @@ class MainWindow(QMainWindow):
             strings.STATUS_REVIEWER.format(name=name) if name else strings.STATUS_REVIEWER_NONE
         )
         bar.addPermanentWidget(self.reviewer_label)
-        bar.addPermanentWidget(QLabel(strings.STATUS_SCHEMA.format(version=self._status.schema_version)))
+        self.schema_label = QLabel(strings.STATUS_SCHEMA.format(version=self._status.schema_version))
+        bar.addPermanentWidget(self.schema_label)
         bar.addPermanentWidget(QLabel(strings.STATUS_VERSION.format(version=__version__)))
 
     # -- actions ---------------------------------------------------------
@@ -399,6 +487,22 @@ class MainWindow(QMainWindow):
             schema=self._status.schema_version,
             sqlite=self._status.sqlite_version,
         )
+
+    def create_compare_dialog(self) -> CompareDialog:
+        return CompareDialog(self._paths, self)
+
+    def open_compare_dialog(self) -> None:
+        dialog = self.create_compare_dialog()
+        dialog.exec()
+        dialog.deleteLater()
+
+    def create_shortcuts_dialog(self) -> ShortcutsDialog:
+        return ShortcutsDialog(self)
+
+    def show_shortcuts(self) -> None:
+        dialog = self.create_shortcuts_dialog()
+        dialog.exec()
+        dialog.deleteLater()
 
     def _show_about(self) -> None:
         QMessageBox.about(self, strings.ABOUT_TITLE, self.about_text())

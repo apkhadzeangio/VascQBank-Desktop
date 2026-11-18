@@ -222,6 +222,7 @@ def test_there_are_no_edit_or_approval_controls(view: CatalogView) -> None:
         strings.CAT_PREVIOUS,
         strings.CAT_NEXT,
         strings.DET_COPY,
+        *strings.QF_LABELS,  # quick filters (Phase 8): they select, they never change a question
     }
     assert strings.DET_READ_ONLY in view.detail_view.read_only_note.text()
 

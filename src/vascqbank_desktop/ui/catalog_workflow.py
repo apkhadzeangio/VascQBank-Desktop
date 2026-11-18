@@ -23,7 +23,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QShortcut
 from PySide6.QtWidgets import QMessageBox, QVBoxLayout
 
 from vascqbank_desktop.domain.catalog import QuestionDetail
@@ -45,6 +45,7 @@ from vascqbank_desktop.services.edit_errors import (
 from vascqbank_desktop.services.review_service import ReviewResult
 from vascqbank_desktop.ui import strings
 from vascqbank_desktop.ui.formatting import format_clock
+from vascqbank_desktop.ui.keys import key
 from vascqbank_desktop.ui.question_editor_view import problem_text, storage_text
 from vascqbank_desktop.ui.workflow_widgets import ReasonDialog, WorkflowBar
 
@@ -82,10 +83,11 @@ class WorkflowController:
         self._bind(("Ctrl+Shift+R",), self.reject)
         self._bind(("Ctrl+Shift+O",), self.reopen)
         self._bind(("Ctrl+Shift+B",), self.restore_selected)
+        self._bind(("Ctrl+Shift+I",), self.start_review)
 
     def _bind(self, sequences: tuple[str, ...], handler) -> None:  # noqa: ANN001
         for sequence in sequences:
-            shortcut = QShortcut(QKeySequence(sequence), self.view)
+            shortcut = QShortcut(key(sequence), self.view)
             shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             shortcut.activated.connect(handler)
             self._shortcuts.append(shortcut)

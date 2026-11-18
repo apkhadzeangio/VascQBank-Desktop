@@ -1,6 +1,6 @@
 # VascQBank Review Desktop — Architecture
 
-This document describes the architecture implemented in Phases 1–7 and the design
+This document describes the architecture implemented in Phases 1–8 and the design
 that later phases implement. Sections marked **(implemented)** describe code
 that exists and is tested; sections marked **(design)** are the plan.
 
@@ -480,10 +480,10 @@ Implemented in Phase 3 (§15.6): manual "create backup now" (reason `manual`, ne
 pruned), and the backup list with creation time, type, size and a re-verification
 (size, SHA-256, `integrity_check`, row counts against the manifest).
 
-Design (later phase): "save backup as…", start-up backup if the last one is older
-than 24 h, and **restore**: validate
-the chosen backup → safety backup of the current database → close
-connections → atomic replace → remove stale `-wal`/`-shm` → reopen and migrate.
+**Restore is implemented in Phase 8 (§28)**: verify the chosen backup → verified safety backup of
+the current database → close connections → atomic replace through a journal → stale
+`-wal`/`-shm` set aside → reopen and migrate. Still design: "save backup as…" and a start-up
+backup if the last one is older than 24 h.
 
 ## 11. Word and TXT export (implemented — Phase 6, details in §22)
 
@@ -691,7 +691,8 @@ Window geometry is restored only if enough of it overlaps a connected screen
 `services/backup_service.py` + `ui/backup_view.py`: create a verified backup on a worker
 thread, list backups newest first, and verify them in the background (manifest size and
 SHA-256, read-only open, `integrity_check`, per-table counts). A damaged backup is shown as
-damaged with the reason. There is **no restore action** (§10).
+damaged with the reason. Phase 8 added the restore action (§28.6): the page only *requests* the
+restore dialog, which verifies, explains and needs an explicit confirmation.
 
 ## 16. Seed database distribution (design of Phase 3 — implemented in Phase 7, see §24)
 
@@ -1381,7 +1382,7 @@ without its record. SIGKILL tests cover `journal-written`, `inserted`, `renamed`
   elsewhere are not considered.
 * Fsync is best-effort on Windows directories (not supported there); NTFS journalling covers renames.
 
-## 27. Phase 8 handoff
+## 27. Phase 8 handoff (done — see §28–§31)
 
 * **In-app backup restore** can now build on §24.5: the recovery dialog is the natural entry point;
   restore into `database/.restore-*.partial`, verify (`verify_backup`), publish with the same
@@ -1391,3 +1392,223 @@ without its record. SIGKILL tests cover `journal-written`, `inserted`, `renamed`
   identical → skip, differing → list as conflicts (§7.4). Never replace reviewer work.
 * Keep `prepare_storage` the single place that decides about creating a database, and keep every path
   that publishes a file a no-overwrite publish.
+
+## 28. Restoring a backup (implemented — Phase 8)
+
+### 28.1 Layers
+
+```
+ui/backup_view.py        "ამ ასლიდან აღდგენა…" → only *requests* the dialog (restoreRequested)
+ui/restore_dialog.py     choose · verify in background · details · confirmation box · restore on a worker
+ui/main_window.py        prepare_for_restore() (quiesce) · apply_restore() / reload_database()
+app/main.py              missing database: recovery message → "სარეზერვო ასლიდან აღდგენა…" → same dialog
+services/restore_service.py   inspect_backup · restore_backup · recover_interrupted_restore
+services/startup.py      prepare_storage() resolves an interrupted restore FIRST (step 0)
+```
+
+Two situations: **A** — the working database is missing (start-up recovery message, §24.5);
+**B** — it exists and the reviewer explicitly wants an older backup (backup page or *File* menu).
+Nothing happens without the dialog's confirmation box ticked and the destructive button pressed;
+*Cancel* is the default button.
+
+### 28.2 Verification before anything is touched (`inspect_backup`)
+
+The backup must have its manifest (`….sqlite3.json`) — a backup without one is refused because its
+SHA-256 cannot be checked. Then: size and **SHA-256 against the manifest**; the file is opened
+read-only and `immutable`; **application id**; `PRAGMA integrity_check`; **`PRAGMA
+foreign_key_check`**; schema version `1 … LATEST` (newer → refused, older → accepted and migrated after
+the restore behind its own pre-migration backup); row counts equal to the manifest. The dialog shows
+the backup's date, type, per-status question counts, drafts, revisions, schema and size, and warns if
+the backup belongs to another database (different `database_id`). The confirmed SHA-256 is passed to
+the restore, so a file changed after the check is refused (`CHANGED_SINCE_CHECK`).
+
+### 28.3 The restore protocol (`restore_backup`)
+
+| Step | What | Checkpoint |
+|---|---|---|
+| 0 | refuse if `journal/restore.json` exists; delete stray `database/.restore-*.partial` | — |
+| 1 | `inspect_backup` again; compare with the confirmed SHA-256 | `verified` |
+| 2 | (B) `wal_checkpoint(TRUNCATE)` and close; if `-wal`/`-shm` remain, **another connection has the database open** → `DATABASE_BUSY`, nothing done. Safety backup `pre-restore` via the ordinary verified backup code (never pruned); quiesce again; SHA-256 of the live file | `safety-backup` |
+| 3 | backup API copy (read-only source) → `database/.restore-<uuid>.partial`; provenance (`restored_from_backup`, `restored_from_sha256`, `restored_at`) into `app_metadata`; `journal_mode=DELETE`; fsync; re-verify (integrity, FKs, app id, counts, `database_id`); SHA-256 | `temp-created` |
+| 4 | durable journal (fsync file + directory): backup, hashes, safety backup, temp name, stamp | `journal-written` |
+| 5 | (B) live file unchanged since step 2? else `DATABASE_BUSY`. **Hard link** the live file into `displaced/vascqbank-<stamp>-displaced.sqlite3` (copy + verify where links are impossible); stale `-wal`/`-shm`/`-journal` are **moved** there too (a stale WAL would otherwise be replayed into the restored file). Journal stage `displaced` | `displaced` |
+| 6 | (B) `os.replace(temp, live)` — one atomic rename; the old inode stays reachable in `displaced/`. (A) no-overwrite `os.link` publish — a database that appeared meanwhile is never overwritten | `replaced` |
+| 7 | journal stage `published` | `published` |
+| 8 | delete the derived search index (+ side files) | `index-removed` |
+| 9 | reopen through `initialize_storage` (migrates older schemas behind a pre-migration backup); `quick_check` must pass; remove the journal | `completed` |
+
+Only after step 9 is success reported. Errors: before step 7 an exception runs the same recovery
+in-process (rollback, §28.4); if reopening fails (step 8–9), the previous database is put back
+(copied from `displaced/` through a temp file + atomic rename) and the restored file is kept as
+`…-restored-unusable.sqlite3` → `REOPEN_FAILED`. **No path deletes the current database.**
+
+### 28.4 Crash recovery (`recover_interrupted_restore`, run by `prepare_storage` before anything opens a database)
+
+| Journal | Live file | Decision |
+|---|---|---|
+| none | — | delete stray `.restore-*.partial` (never published, never referenced) → `NONE` |
+| unreadable | — | `AMBIGUOUS` |
+| `prepared` | present (B) / absent (A) | **roll back**: delete the temp copy and the journal; the live database was never touched |
+| `prepared` | absent though it existed | `AMBIGUOUS` |
+| `displaced` | SHA-256 = original | **roll back** (the duplicate link in `displaced/` is removed after its hash is checked) |
+| `displaced` | SHA-256 = restored copy | the replace happened → **complete** (steps 8–9) |
+| `displaced` (A) | a foreign file appeared | **roll back** (only our temp copy is removed; the other file is untouched) |
+| `displaced` | anything else / missing | `AMBIGUOUS` |
+| `published` | present | **complete** (idempotent: index removal and reopen can run again) |
+| `published` | missing | `AMBIGUOUS` |
+
+`AMBIGUOUS` means: **nothing is changed**, the journal stays, start-up stops with
+`Outcome.RESTORE_INTERRUPTED` (exit code 5) and a Georgian message lists every candidate file (the
+live file, temp copies, `displaced/`, the safety backup). An older database is never chosen silently
+when a newer one may exist: before publication the newer live database always wins (roll back). A
+finished or undone restore is announced once at the next start. Recovery is idempotent and itself
+crash-safe (a crash during recovery is recovered again — tested).
+
+### 28.5 Coordination inside the program
+
+Services open short-lived connections per operation, so the hand-over is: `prepare_for_restore()`
+refuses while an export or a backup *creation* runs; writes the editor's text as a draft and leaves
+edit/history mode (if the draft cannot be written and the reviewer keeps the text, the restore does
+not start); flushes the session; waits for a running search, export preview and index warm-up
+(their late results are discarded by generation counters). The restore itself runs on a worker
+thread; the dialog cannot be closed meanwhile. Afterwards `reload_database()` refreshes the home
+page (database facts incl. "restored from"), status bar, counts, the catalog (re-resolving the saved
+session in the restored data), drafts, export preview and rebuilds the search index.
+
+**Second program instance.** A `QLockFile` (`<data>/vascqbank.lock`) now allows one running program
+per data folder (`EXIT_ALREADY_RUNNING` = 6); stale locks of a dead process are taken over. Even
+without it, the restore detects other open connections (step 2) and a changed live file (step 5).
+
+### 28.6 Backup page
+
+Create now · verify all · open folder · **restore from the selected backup**; table with time, type
+(manual / before import / before migration / **before restore**), question count (from the manifest
+until verified), size, verification status (in words, colour only as a supplement), file. The selected
+backup is named under the table; double-click or the button opens the dialog. The note says that
+backups on the same disk do not protect against disk failure and recommends copying `backups/` to
+another device. Automatic retention is unchanged (20 automatic; manual and pre-restore never pruned).
+
+### 28.7 Tests
+
+`test_restore_service.py` (31): verified restore A and B, safety backup content, displaced file
+byte-identical, provenance, index removal, repeated restores and restoring the safety backup, older
+schema + migration, and refusals — no manifest, SHA-256, size, foreign keys, schema too new, foreign
+application, damaged pages, counts, changed since check, database in use — each proving the live file
+unchanged and nothing left behind; injected errors at every checkpoint; ambiguous journals.
+`test_restore_crash.py` (11): **SIGKILL in a child process at all nine checkpoints**, then start-up
+recovery, idempotence, a crash during recovery. `test_restore_gui.py` (12): dialog, confirmation,
+window refresh, editor text saved first, export blocks, damaged backup, no cancel while running,
+refusal message, start-up restore, interrupted-restore stop, single instance.
+
+## 29. Reviewer workspace (implemented — Phase 8)
+
+### 29.1 Workflow
+
+Open → read → (edit → save) → approve / reject → continue. **Quick filters** replace the status
+drop-down: `ყველა · მოლოდინში · პროცესში · დამტკიცებული · უარყოფილი · მონახაზით` (Alt+1…6); the
+last one is a new filter `CatalogFilter.drafts_only` (`EXISTS` on the unique `drafts.question_id`).
+Sorting moved into the list header. Filtering never writes. When the open question leaves the list
+after a decision (e.g. approved while "pending" is active), next/previous continue from its **old
+neighbours** instead of jumping to the top (`CatalogView._remember_neighbours`). Approve-and-next
+keeps subject and filter. Unresolved conflicts and undeletable drafts still block navigation (Phase 4).
+A draft never changes a status; the first *saved revision* moves a pending question to "in review"
+(domain rule, §18), and only an explicit approval approves.
+
+### 29.2 Keyboard
+
+| Keys | Action |
+|---|---|
+| Ctrl+F · Ctrl+G · **Ctrl+L** | search · go to ID/number · focus the question list (↑/↓ open questions) |
+| Alt+← / Alt+→ | previous / next |
+| **Alt+1 … Alt+6** | quick filters |
+| Ctrl+Enter · Ctrl+Shift+Enter | approve and next · approve |
+| Ctrl+Shift+R · Ctrl+Shift+O · **Ctrl+Shift+I** | reject · reopen · start review |
+| Ctrl+E · Ctrl+S · Ctrl+1…5 · Esc · Ctrl+H · Ctrl+Shift+B | edit · save · correct answer · leave editor · history · restore revision |
+| Ctrl+I · Ctrl+Shift+E · **F1** · Ctrl+Q | import · export · shortcut list · quit |
+
+Visible hints: a one-line hint under the catalog, shortcuts in tooltips and menus, and F1.
+**Two keyboard defects were found and fixed:** (1) with Qt's Georgian catalogue loaded,
+`QKeySequence("Ctrl+Enter")` parses as Ctrl+Return — the two approve shortcuts became one ambiguous
+sequence that Qt never triggers; every shortcut is now built with `ui/keys.py::key()` (portable
+notation). (2) After choosing the catalog in the sidebar, focus stayed in the sidebar so the catalog's
+shortcuts did nothing; showing the catalog now puts focus into it (`focus_content`). Both have
+regression tests. A test also asserts that no two shortcuts collide and that every documented shortcut
+exists.
+
+### 29.3 Counts
+
+All numbers come from SQLite (`question_stats.bank_counts`): per subject and globally — imported,
+the four statuses and **unfinished drafts**. The home page has a per-subject table with a separate
+"target" column (never shown as imported); the catalog strip and the home dashboard show drafts.
+Draft counts refresh when a draft appears or disappears.
+
+### 29.4 Screen sizes
+
+Checked at 1280×720, 1366×768, 1440×900 and 1920×1080 and after user resizing (`test_reviewer_ux.py`:
+every visible button/combo of every page is inside the window or inside a scroll area, and no button is
+narrower than its text needs). Long questions scroll in the detail panel; the export page's two columns
+sit in a scroll area. High-DPI: Qt 6 scales automatically; a 150 % render is in the screenshots. All of
+this is **offscreen rendering on Linux**; it is not a test on real Windows or CachyOS desktops.
+
+### 29.5 Georgian localization
+
+Application text lives in `ui/strings.py`. Qt's own texts ("Show Details...", OK/Cancel/Yes/No,
+context menus) come from Qt's catalogue `qtbase_ka.qm` (shipped with PySide6; a copy in
+`resources/translations/` would take precedence — Phase 10 should bundle one), loaded by
+`ui/localization.py`, with a small override layer for renderings that read wrongly ("OK" is „დიახ"
+— "yes" — in Qt's catalogue; here „კარგი") and as a fallback if the catalogue is missing. A test walks
+every page and the new dialogs and fails on Latin-script words other than technical identifiers (SQLite,
+DOCX, TXT, EVAR, IDs, file names, font names). Question content is never translated.
+
+### 29.6 Accessibility
+
+Accessible names on the list, search, go-to, subject/sort selectors, quick filters and tables; a
+visible blue focus ring (not colour alone — a 2 px outline) on buttons, combos, check boxes, tables and
+the list; statuses always written in words; medical text selectable and copyable; disabled actions are
+disabled, not hidden. The review cycle is tested end to end with the keyboard only.
+
+## 30. Comparing with a newer source (implemented read-only — Phase 8)
+
+`services/seed_compare.py`: `compare_sources(paths, folders)` reuses the importer's dry run (parsing,
+validation, source fingerprints); `compare_seed(paths, seed_dir)` verifies the seed like a first launch
+and reads it read-only. Result per question ID: **NEW**, **IDENTICAL** (same source fingerprint),
+**CONFLICT** (same ID, different source; with whether the working question is already edited or
+decided) and **MISSING** (only in the working database); invalid and duplicated proposed items are
+counted. *File → ახალ ვერსიასთან შედარება…* shows the counts and ID lists. **Nothing is merged**: there is
+no merge action; adding new questions remains the ordinary explicit import, which skips identical and
+conflicting questions and never replaces edited or approved ones.
+
+## 31. Measured (Phase 8, 10,000 synthetic questions)
+
+PERF_TABLE
+
+## 32. Remaining risks (Phase 8)
+
+* **All backups are on the same disk** as the database; a disk failure loses both. The program
+  recommends copying `backups/` elsewhere but cannot enforce it.
+* **Restore across processes**: another program (not this application) writing the file between the
+  final hash check and the atomic rename would write into the displaced inode — kept, not lost, but not
+  in the restored database. The instance lock covers this application.
+* **Windows**: `os.replace` over a file another process has open fails (sharing violation) — the
+  restore then reports `PUBLISH_FAILED` and rolls back; hard links on FAT/exFAT or network drives fall
+  back to a verified copy. Not tested on real Windows.
+* `displaced/` grows with every restore (one database copy each); nothing deletes it automatically.
+* The interrupted-restore `AMBIGUOUS` case needs a person to choose a file; there is no in-app chooser.
+* Restoring a backup brings back its `export_runs`; exports published after the backup are still on
+  disk but no longer listed in the database.
+* Qt's Georgian catalogue may be missing in a stripped package → only the override essentials are
+  Georgian (Phase 10: bundle `qtbase_ka.qm`).
+* The visual checks are offscreen renders; real-platform DPI/scaling and fonts may differ.
+
+## 33. Phase 9 handoff — reliability, data integrity and release readiness
+
+* Re-run every crash suite (`test_edit_crash`, `test_review_crash`, `test_export_publication`,
+  `test_restore_crash`, seed install) on **real Windows 10/11 and CachyOS**, including antivirus
+  interference and a USB/exFAT data folder (no hard links).
+* Power-loss style tests (fsync behaviour) are beyond SIGKILL; consider a VM snapshot harness.
+* Long-session soak test (hours of navigation/editing with autosave) watching memory and handle counts.
+* Fuzz the TXT parser and the manifest/journal readers; property-test round trips.
+* End-to-end acceptance script: empty start → import partial bank → review → export → backup → restore
+  → export again; compare outputs.
+* Review all exit codes and Georgian messages with a native speaker; screen-reader check (NVDA/Orca).
+* Decide "save backup as…" (copy to another device) and a start-up backup when the last is old.

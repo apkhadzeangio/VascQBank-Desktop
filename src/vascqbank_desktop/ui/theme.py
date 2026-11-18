@@ -35,6 +35,7 @@ WARNING_FG = "#5C4300"
 INFO_BG = "#E8F1FC"
 INFO_BORDER = "#B9D3F2"
 INFO_FG = "#164A82"
+FOCUS = "#1B5AA6"  # keyboard-focus ring: blue, distinct from the burgundy accent
 
 # (text colour, background) per review status. Status is always also written out
 # in words, so colour is never the only signal.
@@ -655,6 +656,35 @@ QToolTip {{
     color: {SIDEBAR_TEXT};
     border: none;
     padding: 6px;
+}}
+
+/* ---- Quick filters, hints and keyboard focus (Phase 8) ------------- */
+QPushButton#FilterChip {{
+    padding: 5px 12px;
+    border-radius: 14px;
+    background: {CARD_BG};
+    color: {TEXT};
+    border: 1px solid #C9D0D9;
+}}
+QPushButton#FilterChip:hover {{
+    border-color: {ACCENT};
+}}
+QPushButton#FilterChip:checked {{
+    background: {ACCENT};
+    color: #FFFFFF;
+    border-color: {ACCENT};
+    font-weight: 600;
+}}
+QLabel#ShortcutHint {{
+    color: {TEXT_MUTED};
+    font-size: 9pt;
+}}
+/* A visible focus ring on every control reachable with Tab (not colour alone: a thick outline). */
+QPushButton:focus, QComboBox:focus, QCheckBox:focus, QTableWidget:focus, QListView#QuestionList:focus {{
+    border: 2px solid {FOCUS};
+}}
+QPushButton#FilterChip:checked:focus {{
+    border: 2px solid {FOCUS};
 }}
 """
 

@@ -4,21 +4,28 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QPushButton,
     QScrollArea,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from vascqbank_desktop.services.question_stats import ProgressSummary
+from vascqbank_desktop.domain.review_status import ReviewStatus
+from vascqbank_desktop.domain.subjects import SUBJECTS
+from vascqbank_desktop.services.question_stats import BankCounts, ProgressSummary
 from vascqbank_desktop.services.storage import StorageStatus
 from vascqbank_desktop.ui import strings
 from vascqbank_desktop.ui.formatting import format_timestamp
 from vascqbank_desktop.ui.progress_panel import ProgressPanel
+from vascqbank_desktop.ui.widgets import repolish
 
 
 def _card(object_name: str = "Card") -> tuple[QFrame, QVBoxLayout]:
@@ -88,6 +95,8 @@ class WelcomeView(QWidget):
         page.addWidget(self.drafts_card)
         page.addWidget(self.resume_card)
         page.addWidget(self.bank_card)
+        self.subjects_card = self._build_subjects_card()
+        page.addWidget(self.subjects_card)
         page.addWidget(self._build_storage_card(status))
         page.addWidget(self._build_roadmap())
         page.addStretch(1)
@@ -175,6 +184,59 @@ class WelcomeView(QWidget):
                                       subjects=subjects_with_questions)
         )
 
+    def _build_subjects_card(self) -> QFrame:
+        card, layout = _card()
+        layout.addWidget(_label(strings.HOME_SUBJECTS_TITLE, "CardTitle"))
+        headers = [
+            strings.HOME_COL_SUBJECT,
+            strings.HOME_COL_IMPORTED,
+            *(status.label_ka for status in ReviewStatus),
+            strings.HOME_COL_DRAFTS,
+            strings.HOME_COL_TARGET,
+        ]
+        self.subjects_table = QTableWidget(len(SUBJECTS), len(headers))
+        self.subjects_table.setAccessibleName(strings.HOME_SUBJECTS_TITLE)
+        self.subjects_table.setHorizontalHeaderLabels(headers)
+        self.subjects_table.verticalHeader().setVisible(False)
+        self.subjects_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.subjects_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.subjects_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.subjects_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.subjects_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for column in range(1, len(headers)):
+            self.subjects_table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeMode.ResizeToContents
+            )
+        for row, subject in enumerate(SUBJECTS):
+            item = QTableWidgetItem(subject.name_ka)
+            item.setToolTip(f"{subject.code} — {subject.name_ka}")
+            self.subjects_table.setItem(row, 0, item)
+        self.subjects_table.resizeRowsToContents()
+        layout.addWidget(self.subjects_table)
+        layout.addWidget(_label(strings.HOME_SUBJECTS_NOTE, "ScopeNote"))
+        card.setVisible(False)
+        return card
+
+    def set_subject_counts(self, bank: BankCounts) -> None:
+        """Per-subject numbers, all read from the database; the target is shown only as a target."""
+        table = self.subjects_table
+        for row, subject in enumerate(SUBJECTS):
+            counts = bank.subjects.get(subject.code)
+            values = [
+                counts.total if counts else 0,
+                *((counts.count(status) if counts else 0) for status in ReviewStatus),
+                counts.drafts if counts else 0,
+                subject.target_count,
+            ]
+            for column, value in enumerate(values, start=1):
+                item = QTableWidgetItem(f"{value:,}".replace(",", "\u00a0"))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                table.setItem(row, column, item)
+        table.resizeRowsToContents()
+        height = table.horizontalHeader().height() + sum(table.rowHeight(r) for r in range(table.rowCount()))
+        table.setFixedHeight(height + 2 * table.frameWidth())
+        self.subjects_card.setVisible(bank.total > 0)
+
     def set_progress(
         self, bank: ProgressSummary, subject: ProgressSummary | None, subject_name: str | None
     ) -> None:
@@ -188,42 +250,56 @@ class WelcomeView(QWidget):
         grid.setHorizontalSpacing(18)
         grid.setVerticalSpacing(6)
         grid.setColumnStretch(1, 1)
+        self._storage_values: dict[str, QLabel] = {
+            "location": _label("", "FieldValue", selectable=True),
+            "schema": _label("", "FieldValue", wrap=False),
+            "integrity": _label("", "StatusOk", wrap=False),
+            "database_id": _label("", "FieldValue", wrap=False, selectable=True),
+            "seed": _label("", "FieldValue", selectable=True),
+            "restored": _label("", "FieldValue", selectable=True),
+        }
+        names = {
+            "location": strings.STORAGE_LOCATION,
+            "schema": strings.STORAGE_SCHEMA,
+            "integrity": strings.STORAGE_INTEGRITY,
+            "database_id": strings.STORAGE_DATABASE_ID,
+            "seed": strings.STORAGE_SEED,
+            "restored": strings.STORAGE_RESTORED,
+        }
+        self._storage_names: dict[str, QLabel] = {}
+        for row, (key, value) in enumerate(self._storage_values.items()):
+            name = _label(names[key], "FieldName", wrap=False)
+            self._storage_names[key] = name
+            grid.addWidget(name, row, 0, Qt.AlignmentFlag.AlignTop)
+            grid.addWidget(value, row, 1)
+        self.storage_path_label = self._storage_values["location"]
+        layout.addLayout(grid)
+        self.set_status(status)
+        return card
 
+    def set_status(self, status: StorageStatus) -> None:
+        """Show the facts of the working database (again after a restore)."""
         opened = strings.STORAGE_CREATED_NOW if status.created_new else strings.STORAGE_OPENED
-        integrity_text = (
+        values = self._storage_values
+        values["location"].setText(str(status.database_path))
+        values["schema"].setText(f"v{status.schema_version} · {opened}")
+        values["integrity"].setText(
             strings.STORAGE_INTEGRITY_OK if status.integrity_ok else strings.STORAGE_INTEGRITY_FAILED
         )
-        rows: list[tuple[str, QLabel]] = [
-            (
-                strings.STORAGE_LOCATION,
-                _label(str(status.database_path), "FieldValue", selectable=True),
-            ),
-            (
-                strings.STORAGE_SCHEMA,
-                _label(f"v{status.schema_version} · {opened}", "FieldValue", wrap=False),
-            ),
-            (
-                strings.STORAGE_INTEGRITY,
-                _label(
-                    integrity_text,
-                    "StatusOk" if status.integrity_ok else "StatusBad",
-                    wrap=False,
-                ),
-            ),
-            (
-                strings.STORAGE_DATABASE_ID,
-                _label(status.database_id, "FieldValue", wrap=False, selectable=True),
-            ),
-            (strings.STORAGE_SEED, _label(seed_text(status), "FieldValue", selectable=True)),
-        ]
-        for row, (name, value) in enumerate(rows):
-            grid.addWidget(
-                _label(name, "FieldName", wrap=False), row, 0, Qt.AlignmentFlag.AlignTop
+        values["integrity"].setObjectName("StatusOk" if status.integrity_ok else "StatusBad")
+        repolish(values["integrity"])
+        values["database_id"].setText(status.database_id)
+        values["seed"].setText(seed_text(status))
+        restored = bool(status.restored_from)
+        values["restored"].setText(
+            strings.STORAGE_RESTORED_VALUE.format(
+                name=status.restored_from, time=format_timestamp(status.restored_at)
             )
-            grid.addWidget(value, row, 1)
-        self.storage_path_label = rows[0][1]
-        layout.addLayout(grid)
-        return card
+            if restored
+            else ""
+        )
+        values["restored"].setVisible(restored)
+        self._storage_names["restored"].setVisible(restored)
 
     def _build_roadmap(self) -> QFrame:
         card, layout = _card()

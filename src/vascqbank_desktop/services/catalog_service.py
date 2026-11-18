@@ -85,12 +85,14 @@ class CatalogService:
         terms = flt.terms
         with self._reader() as conn:
             if not terms:
-                ids = repo.list_ids(conn, flt.subject_code, flt.status, flt.sort)
+                ids = repo.list_ids(conn, flt.subject_code, flt.status, flt.sort, drafts_only=flt.drafts_only)
                 return ResultSet(tuple(ids), (), SearchMode.BROWSE)
             ids_fts = self._fts_ids(conn, flt, terms) if self.fts_available and fts_supports(terms) else None
             if ids_fts is not None:
                 return ResultSet(tuple(ids_fts), terms, SearchMode.FTS)
-            ids = repo.search_ids_like(conn, terms, flt.subject_code, flt.status, flt.sort)
+            ids = repo.search_ids_like(
+                conn, terms, flt.subject_code, flt.status, flt.sort, drafts_only=flt.drafts_only
+            )
             return ResultSet(tuple(ids), terms, SearchMode.LIKE)
 
     def _fts_ids(
@@ -107,7 +109,12 @@ class CatalogService:
                     try:
                         if search_index.attached_index_is_fresh(conn, schema, expected):
                             return repo.search_ids_fts(
-                                conn, fts_match_expression(terms), flt.subject_code, flt.status, flt.sort
+                                conn,
+                                fts_match_expression(terms),
+                                flt.subject_code,
+                                flt.status,
+                                flt.sort,
+                                drafts_only=flt.drafts_only,
                             )
                     finally:
                         conn.execute(f"DETACH DATABASE {schema}")

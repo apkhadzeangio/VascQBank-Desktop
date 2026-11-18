@@ -2,6 +2,8 @@
 
 :func:`prepare_storage` decides — in this order, and never destructively:
 
+0. An interrupted backup restore is finished or undone (``restore_service``); if that cannot be proven
+   safe, :attr:`Outcome.RESTORE_INTERRUPTED` — nothing is opened or created and the reviewer decides.
 1. Temporary files of an interrupted seed installation are removed (they are never a published
    database).
 2. **A working database exists** → it is opened and migrated as always (``initialize_storage``).
@@ -25,6 +27,12 @@ from pathlib import Path
 
 from vascqbank_desktop.config.paths import AppPaths
 from vascqbank_desktop.db.backup import list_backups
+from vascqbank_desktop.services.restore_service import (
+    RecoveryOutcome,
+    RestoreRecovery,
+    displaced_dir,
+    recover_interrupted_restore,
+)
 from vascqbank_desktop.services.seed_service import (
     DatabaseAlreadyExists,
     SeedInstallResult,
@@ -42,6 +50,7 @@ class Outcome(StrEnum):
     READY = "READY"
     RECOVERY_NEEDED = "RECOVERY_NEEDED"
     SEED_INVALID = "SEED_INVALID"
+    RESTORE_INTERRUPTED = "RESTORE_INTERRUPTED"  # a restore that cannot be finished or undone safely
 
 
 class EvidenceKind(StrEnum):
@@ -50,6 +59,7 @@ class EvidenceKind(StrEnum):
     SEARCH_INDEX = "SEARCH_INDEX"
     EXPORTS = "EXPORTS"
     SETTINGS = "SETTINGS"
+    DISPLACED = "DISPLACED"  # databases set aside by a restore
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +76,7 @@ class StartupResult:
     evidence: tuple[Evidence, ...] = ()
     seed_problem: SeedInvalid | None = None
     cleaned: tuple[Path, ...] = field(default_factory=tuple)
+    restore_recovery: RestoreRecovery | None = None  # an interrupted restore found at start-up
 
 
 def recovery_evidence(paths: AppPaths) -> tuple[Evidence, ...]:
@@ -87,6 +98,11 @@ def recovery_evidence(paths: AppPaths) -> tuple[Evidence, ...]:
             found.append(Evidence(EvidenceKind.EXPORTS, exports))
     if paths.settings_file.exists():
         found.append(Evidence(EvidenceKind.SETTINGS, (paths.settings_file,)))
+    displaced = displaced_dir(paths)
+    if displaced.is_dir():
+        kept = tuple(sorted(p for p in displaced.iterdir() if p.is_file()))
+        if kept:
+            found.append(Evidence(EvidenceKind.DISPLACED, kept))
     return tuple(found)
 
 
@@ -94,11 +110,18 @@ def prepare_storage(
     paths: AppPaths, seed_dir: Path | None, *, allow_new_database: bool = False
 ) -> StartupResult:
     paths.ensure_directories()
+    # An interrupted restore is resolved first, before anything opens or creates a database.
+    recovery = recover_interrupted_restore(paths)
+    if recovery.outcome is RecoveryOutcome.AMBIGUOUS:
+        return StartupResult(Outcome.RESTORE_INTERRUPTED, restore_recovery=recovery)
+    restored = recovery if recovery.outcome is not RecoveryOutcome.NONE else None
     cleaned = tuple(cleanup_interrupted_installs(paths))
     if cleaned:
         log.warning("Removed %s file(s) of an interrupted seed installation", len(cleaned))
     if paths.database_file.exists():
-        return StartupResult(Outcome.READY, initialize_storage(paths), cleaned=cleaned)
+        return StartupResult(
+            Outcome.READY, initialize_storage(paths), cleaned=cleaned, restore_recovery=restored
+        )
 
     evidence = recovery_evidence(paths)
     if evidence and not allow_new_database:
@@ -107,7 +130,9 @@ def prepare_storage(
             paths.database_file,
             ", ".join(e.kind.value for e in evidence),
         )
-        return StartupResult(Outcome.RECOVERY_NEEDED, evidence=evidence, cleaned=cleaned)
+        return StartupResult(
+            Outcome.RECOVERY_NEEDED, evidence=evidence, cleaned=cleaned, restore_recovery=restored
+        )
 
     installed: SeedInstallResult | None = None
     if seed_dir is not None:
@@ -123,4 +148,10 @@ def prepare_storage(
             return StartupResult(Outcome.SEED_INVALID, seed_problem=exc, cleaned=cleaned)
         except DatabaseAlreadyExists:  # another instance installed it a moment ago: use that one
             installed = None
-    return StartupResult(Outcome.READY, initialize_storage(paths), seed_install=installed, cleaned=cleaned)
+    return StartupResult(
+        Outcome.READY,
+        initialize_storage(paths),
+        seed_install=installed,
+        cleaned=cleaned,
+        restore_recovery=restored,
+    )

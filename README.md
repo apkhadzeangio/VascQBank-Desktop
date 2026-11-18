@@ -12,13 +12,15 @@ and TXT files**.
 * The application **never generates questions**; it only works with imported ones.
 * The user interface is Georgian; code and technical documentation are English.
 
-> **Status: Phase 7 of 10 — embedded question bank and safe first launch.** Working: import,
-> browsing and search, the editor with autosave and crash recovery, approval/rejection/restore, and the
-> verified DOCX/TXT export (Phases 2–6); and now a **bundled seed database**: a distribution can carry
-> the validated bank so that the catalog is ready on first launch, without any import — installed
-> only into an empty installation, never over existing work, and never when traces of a lost database
-> exist. Export publication is now crash-consistent (ARCHITECTURE.md §24–§25). The real bank is not
-> in this repository; everything is tested with synthetic data.
+> **Status: Phase 8 of 10 — reviewer workspace and safe backup restoration.** Working: import,
+> browsing and search, the editor with autosave and crash recovery, approval/rejection/restore, the
+> verified DOCX/TXT export and the bundled seed with a safe first launch (Phases 2–7); and now
+> **restoring the database from a verified backup** inside the program (safety backup first, atomic
+> replacement, crash recovery), quick status/draft filters, a full keyboard workflow (F1 lists the
+> shortcuts), Georgian for Qt's own dialog texts, per-subject counts with drafts and a read-only
+> comparison with a newer source (ARCHITECTURE.md §28–§30). The program works with an empty, a
+> partial or a complete bank. The real bank is not in this repository; everything is tested with
+> synthetic data.
 
 ---
 
@@ -94,9 +96,9 @@ while the application is running.
 * **Without a seed** (a source checkout, as in this repository): an empty database and the manual TXT
   import below, exactly as before. The home page says which applies.
 * **Database missing but traces found** (backups, `-wal` files, exports, settings): the program creates
-  **nothing** and explains what it found. Restore by copying a backup (`backups/vascqbank-….sqlite3`) to
-  `database/vascqbank.sqlite3` while the program is closed, or — after a second confirmation — start a
-  new database; backups are never touched. (Restoring from inside the program is not implemented yet.)
+  **nothing** and explains what it found. Choose **სარეზერვო ასლიდან აღდგენა…** (the backup is
+  verified and restored only after your confirmation), or — after a second confirmation — start a
+  new database; backups are never touched.
 * A **development seed** (synthetic or incomplete test data) is always labelled
   „⚠ სინთეზური სატესტო ბანკი“ in the status bar.
 * A damaged bundled seed is refused with a message; nothing is created.
@@ -125,8 +127,10 @@ question ID — see ARCHITECTURE.md §7.1.
 
 ## Browsing, search and sessions
 
-* **Catalog** (*კითხვები*): choose a subject in the sidebar (or *ყველა თემა*), filter by
-  review status, sort, and click a question. The list is lazy — only the ordered
+* **Catalog** (*კითხვები*): choose a subject in the sidebar (or *ყველა თემა*), pick a **quick
+  filter** — *ყველა · მოლოდინში · პროცესში · დამტკიცებული · უარყოფილი · მონახაზით* (Alt+1…6) —
+  sort, and click a question (or Ctrl+L and ↑/↓). After a decision removes the open question from
+  the filtered list, *შემდეგი* continues right after it. The list is lazy — only the ordered
   IDs are resolved up front and the text of a page of rows is read when it scrolls
   into view — so it stays instant with all 10,000 questions.
 * **Detail view**: ID, Georgian subject, full question, the five options ა–ე with
@@ -142,8 +146,9 @@ question ID — see ARCHITECTURE.md §7.1.
   previous list. SQLite FTS5 with the trigram tokenizer is used when available and
   a LIKE scan otherwise (always for terms shorter than three characters); the result
   list says which one answered.
-* **Progress**: counts of total / pending / in review / approved / rejected for the
-  whole bank and the open subject, read from the database.
+* **Progress**: counts of total / pending / in review / approved / rejected / unfinished drafts for
+  the whole bank and the open subject, and a per-subject table on the home page (the planned target is
+  shown in its own column, never as the imported number) — all read from the database.
 * **Reviewer profile** (*რეცენზენტი*): pick *რამაზი აფხაძე*, *დავით ფარღალავა* or type any
   name. No password or account; the name is stored locally for future edit and
   approval records and never rewrites history.
@@ -151,8 +156,38 @@ question ID — see ARCHITECTURE.md §7.1.
   restored on the next start. If the remembered question no longer matches the
   filter, the nearest following one is shown with an explanation.
 * **Backups** (*სარეზერვო ასლები*): create a verified backup now, see every backup with
-  its time, type, size and verification result. Restoring is deliberately not
-  offered yet. Take one before a long editing session.
+  its time, type, question count, size and verification result, and **restore** one (below).
+  Backups live on the same disk as the database — copy the `backups` folder to another device from
+  time to time.
+
+## Restoring a backup (Phase 8)
+
+*სარეზერვო ასლები* → select a backup → **ამ ასლიდან აღდგენა…** (or *ფაილი → სარეზერვო ასლიდან
+აღდგენა…*; with a missing database also from the start-up message). The dialog checks the backup
+(SHA-256 against its manifest, `integrity_check`, `foreign_key_check`, application and schema version)
+and shows its date and counts; nothing happens until you tick the confirmation and press **აღდგენა**
+(*გაუქმება* is the default). Then, on a background thread: a verified **safety backup** of the current
+database (type *ავტომატური — აღდგენამდე*, never deleted automatically), a verified temporary copy, an
+atomic replacement through a journal, the old file kept in `displaced/`, the search index rebuilt, the
+database reopened and verified — only then is success shown. A failed restore leaves the previous
+database as it was; a restore interrupted by a crash is finished or undone at the next start, and if
+that cannot be proven safe the program stops, changes nothing and lists the candidate files. Only one
+program window per data folder can run.
+
+## Keyboard (F1 shows the full list)
+
+| Keys | Action |
+|---|---|
+| Ctrl+L, ↑/↓ · Alt+←/→ | question list · previous/next |
+| Alt+1 … Alt+6 | quick filters |
+| Ctrl+Enter · Ctrl+Shift+Enter | approve and next · approve |
+| Ctrl+Shift+R · Ctrl+Shift+O · Ctrl+Shift+I | reject · reopen · start review |
+| Ctrl+E · Ctrl+S · Ctrl+1…5 · Esc · Ctrl+H | edit · save · correct answer · leave editor · history |
+| Ctrl+F · Ctrl+G · Ctrl+I · Ctrl+Shift+E · F1 | search · go to ID · import · export · shortcuts |
+
+**Comparing with a newer version** (*ფაილი → ახალ ვერსიასთან შედარება…*): choose a seed folder or a
+folder of TXT files; the program lists new, identical, changed and missing question IDs. It only reads —
+nothing is merged or replaced.
 
 ## Approval workflow (Phase 5)
 
@@ -230,11 +265,13 @@ LibreOffice are in [docs/samples/phase6](docs/samples/phase6).
 
 Rendered from the real window with **synthetic** data (10,000 artificial questions) by
 `tools/capture_screenshots.py`, `tools/capture_screenshots_phase4.py` and
-`tools/capture_screenshots_phase5.py`, `…_phase6.py` and `…_phase7.py`; see
+`tools/capture_screenshots_phase5.py`, `…_phase6.py`, `…_phase7.py` and `…_phase8.py`; see
 [docs/screenshots/phase3](docs/screenshots/phase3), [docs/screenshots/phase4](docs/screenshots/phase4),
 [docs/screenshots/phase5](docs/screenshots/phase5), [docs/screenshots/phase6](docs/screenshots/phase6) and
 [docs/screenshots/phase7](docs/screenshots/phase7) (first launch from a synthetic seed, the recovery and
-damaged-seed messages)
+damaged-seed messages) and [docs/screenshots/phase8](docs/screenshots/phase8) (the catalog at 1280×720,
+1366×768, 1440×900 and 1920×1080 and at 150 %, the home page, backups, the restore dialog, the shortcut
+list and the comparison)
 (the export page, its options, a blocked TXT export, progress and completion) (workflow bar, approve, approve-and-next in a
 filter, reject and reopen dialogs, restore with a draft, the restored history): home dashboard, catalog with the correct
 answer highlighted, search results, backups, the reviewer profile, and (Phase 4) the editor,
@@ -302,10 +339,10 @@ src/vascqbank_desktop/
 ├── config/        constants and cross-platform paths
 ├── domain/        subjects, answer letters, statuses, question IDs, ImportedQuestion
 ├── db/            SQLite policy, ownership check, migrations (schema v2, v3), backups, repositories, search index
-├── services/      use cases: storage init, import, counts, catalog/search, settings, session, backups, drafts, edits, review decisions, approved-text contract, export
+├── services/      use cases: storage init/start-up, import, counts, catalog/search, settings, session, backups, restore, seed (build, install, compare), drafts, edits, review decisions, approved-text contract, export
 ├── validation/    text normalisation, issue catalogue (Georgian), content rules
 ├── importexport/  file discovery, paired-TXT and refined-master parsers, UTF-8 I/O, TXT and Word writers, Word verifier
-├── ui/            PySide6 widgets: catalog, detail, editor, autosave, workflow, history, drafts, export, backups, reviewer, import; strings, theme, workers
+├── ui/            PySide6 widgets: catalog, detail, editor, autosave, workflow, history, drafts, export, backups, restore, comparison, shortcuts, reviewer, import; strings, localization, keys, theme, workers
 └── resources/     bundled fonts (Noto Sans, Noto Sans Georgian) and icon
 tools/             build_seed.py, prepare_package_seed.py — seed build and packaging; capture_screenshots*.py,
                    make_export_samples.py — screenshots and samples (synthetic data)

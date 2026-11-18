@@ -20,6 +20,8 @@ from PySide6.QtCore import QItemSelectionModel, QModelIndex, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
+    QButtonGroup,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -52,6 +54,7 @@ from vascqbank_desktop.ui.autosave import DEFAULT_DELAY_MS, DEFAULT_RETRY_MS
 from vascqbank_desktop.ui.catalog_editing import EditingController, EditingServices
 from vascqbank_desktop.ui.catalog_workflow import WorkflowController
 from vascqbank_desktop.ui.formatting import format_count
+from vascqbank_desktop.ui.keys import key
 from vascqbank_desktop.ui.progress_panel import ProgressStrip
 from vascqbank_desktop.ui.question_delegate import QuestionDelegate
 from vascqbank_desktop.ui.question_detail_view import QuestionDetailView
@@ -119,6 +122,10 @@ class CatalogView(QWidget):
         self._bank: BankCounts | None = None
         self._filter = CatalogFilter()
         self._current_id: int | None = None
+        # where "next"/"previous" continue when the open question left the list after a refresh
+        # (e.g. approved while the "pending" filter is active): its neighbours in the old list
+        self._anchor_from: ResultSet | None = None
+        self._outside: tuple[int | None, int | None] | None = None
         self._generation = 0
         self._updating_controls = False
         self._runner = LatestOnlyRunner(self)
@@ -156,10 +163,19 @@ class CatalogView(QWidget):
         self.splitter.setStretchFactor(1, 6)
         self.splitter.setSizes([430, 640])
         root.addWidget(self.splitter, 1)
+        self.hint_label = make_label(strings.CAT_HINT, "ShortcutHint")
+        root.addWidget(self.hint_label)
 
         clear_search = QShortcut(QKeySequence(Qt.Key.Key_Escape), self.search_edit)
         clear_search.setContext(Qt.ShortcutContext.WidgetShortcut)
         clear_search.activated.connect(self.search_edit.clear)
+        self._shortcuts: list[QShortcut] = [clear_search]
+        for index in range(len(self._quick_options)):
+            shortcut = QShortcut(key(f"Alt+{index + 1}"), self)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(lambda i=index: self.set_quick_filter(i))
+            self._shortcuts.append(shortcut)
+        self._set_accessible_names()
 
         self._sync_controls()
         self._apply_filter()
@@ -214,11 +230,14 @@ class CatalogView(QWidget):
 
         # Enums are mapped by position: Qt would hand a StrEnum back as a plain str.
         self._status_options: list[ReviewStatus | None] = [None, *ReviewStatus]
-        self.status_combo = QComboBox()
+        # The status combo is the programmatic selector; the quick-filter chips below are the
+        # visible control (one click or Alt+1…6 instead of opening a drop-down list).
+        self.status_combo = QComboBox(self)
         self.status_combo.addItem(strings.CAT_STATUS_ALL)
         for status in ReviewStatus:
             self.status_combo.addItem(status.label_ka)
         self.status_combo.currentIndexChanged.connect(self._on_status_combo)
+        self.status_combo.hide()
 
         self._sort_options: list[SortOrder] = list(_SORT_LABELS)
         self.sort_combo = QComboBox()
@@ -226,9 +245,35 @@ class CatalogView(QWidget):
             self.sort_combo.addItem(label)
         self.sort_combo.currentIndexChanged.connect(self._on_sort_combo)
 
-        row.addWidget(self.subject_combo, 3)
-        row.addWidget(self.status_combo, 2)
-        row.addWidget(self.sort_combo, 2)
+        # (status, drafts only) per chip, in the order of Alt+1 … Alt+6
+        self._quick_options: list[tuple[ReviewStatus | None, bool]] = [
+            (None, False),
+            (ReviewStatus.PENDING_REVIEW, False),
+            (ReviewStatus.IN_REVIEW, False),
+            (ReviewStatus.APPROVED, False),
+            (ReviewStatus.REJECTED, False),
+            (None, True),
+        ]
+        self.quick_group = QButtonGroup(self)
+        self.quick_group.setExclusive(True)
+        self.quick_buttons: list[QPushButton] = []
+        chips = QHBoxLayout()
+        chips.setSpacing(6)
+        for index, (label, description) in enumerate(
+            zip(strings.QF_LABELS, strings.QF_DESCRIPTIONS, strict=True)
+        ):
+            button = QPushButton(label)
+            button.setObjectName("FilterChip")
+            button.setCheckable(True)
+            button.setToolTip(strings.QF_TOOLTIP.format(description=description, number=index + 1))
+            button.setAccessibleName(f"{strings.QF_GROUP_NAME}: {description}")
+            button.clicked.connect(lambda _checked=False, i=index: self.set_quick_filter(i))
+            self.quick_group.addButton(button, index)
+            self.quick_buttons.append(button)
+            chips.addWidget(button)
+
+        row.addWidget(self.subject_combo, 1)
+        row.addLayout(chips)
         return row
 
     def _build_list_panel(self) -> QWidget:
@@ -238,8 +283,12 @@ class CatalogView(QWidget):
         column = QVBoxLayout(panel)
         column.setContentsMargins(0, 0, 8, 0)
         column.setSpacing(6)
+        header = QHBoxLayout()
+        header.setSpacing(8)
         self.result_label = make_label("", "ResultInfo", wrap=False)
-        column.addWidget(self.result_label)
+        header.addWidget(self.result_label, 1)
+        header.addWidget(self.sort_combo)
+        column.addLayout(header)
 
         self._list_stack = QStackedWidget()
         self.list_view = QListView()
@@ -359,6 +408,29 @@ class CatalogView(QWidget):
         the draft could not be written and the reviewer chose to keep the text."""
         return self._editing.prepare_shutdown() if self._editing is not None else True
 
+    def leave_editing(self) -> bool:
+        """Write the pending draft and return to the read-only view (before a restore); ``False``
+        means the draft could not be written and the reviewer kept the text in the editor."""
+        return self._editing.leave_for_navigation() if self._editing is not None else True
+
+    def wait_idle(self) -> None:
+        """No search may hold the database open (before a restore); later results are discarded."""
+        self._search_timer.stop()
+        self._generation += 1
+        self._runner.wait_idle()
+
+    def reload_after_restore(self, context: RestoredContext) -> None:
+        """The working database was replaced: forget everything shown and open the remembered
+        context again in the restored data (read-only)."""
+        self._current_id = None
+        self.detail_view.clear()
+        self.model.set_results(ResultSet())
+        self.restore(context)
+        if self._editing is not None:
+            self._editing.refresh_drafts_state()
+            self._editing.update_buttons()
+        self.refresh_workflow()
+
     def flush_editor_draft(self) -> bool:
         """Write any pending draft now (filter and page changes); stays in edit mode."""
         return self._editing.flush_draft() if self._editing is not None else True
@@ -425,6 +497,8 @@ class CatalogView(QWidget):
             self.subject_combo.setCurrentIndex(max(0, self.subject_combo.findData(code)))
             self.status_combo.setCurrentIndex(self._status_options.index(self._filter.status))
             self.sort_combo.setCurrentIndex(self._sort_options.index(self._filter.sort))
+            quick = self._quick_options.index((self._filter.status, self._filter.drafts_only))
+            self.quick_buttons[quick].setChecked(True)
             if text and self.search_edit.text() != self._filter.text:
                 self.search_edit.setText(self._filter.text)
         finally:
@@ -450,9 +524,23 @@ class CatalogView(QWidget):
         self._change_filter(replace(self._filter, subject_code=code), announce=True)
 
     def set_status(self, status: ReviewStatus | None) -> None:
-        if status == self._filter.status:
+        if status == self._filter.status and not self._filter.drafts_only:
             return
-        self._change_filter(replace(self._filter, status=status), announce=True)
+        self._change_filter(replace(self._filter, status=status, drafts_only=False), announce=True)
+
+    def set_quick_filter(self, index: int) -> None:
+        """One of the quick filters (All, the four statuses, With drafts); never changes a status."""
+        if not 0 <= index < len(self._quick_options):
+            return
+        status, drafts_only = self._quick_options[index]
+        if (status, drafts_only) == (self._filter.status, self._filter.drafts_only):
+            self._sync_controls()
+            return
+        self._change_filter(replace(self._filter, status=status, drafts_only=drafts_only), announce=True)
+
+    @property
+    def quick_filter_index(self) -> int:
+        return self._quick_options.index((self._filter.status, self._filter.drafts_only))
 
     def set_sort(self, sort: SortOrder) -> None:
         if sort == self._filter.sort:
@@ -532,7 +620,25 @@ class CatalogView(QWidget):
         self.show_notice(strings.CAT_SEARCH_ERROR.format(detail=error), error=True)
         self._set_result_info("")
 
+    def _remember_neighbours(self, results: ResultSet) -> None:
+        """After a refresh of the same filter: if the open question dropped out of the list, keep its
+        old neighbours (those still listed) as the targets of next / previous."""
+        old, self._anchor_from = self._anchor_from, None
+        current = self._current_id
+        if current is None or current in results:
+            self._outside = None
+            return
+        if old is None or current not in old:
+            return  # a new filter: next/previous start at the list's ends as before
+        position = old.position_of(current)
+        assert position is not None
+        listed = set(results.ids)
+        after = next((i for i in old.ids[position + 1 :] if i in listed), None)
+        before = next((i for i in reversed(old.ids[:position]) if i in listed), None)
+        self._outside = (before, after)
+
     def _apply_results(self, results: ResultSet) -> None:
+        self._remember_neighbours(results)
         self.delegate.show_field_tags = results.mode is not SearchMode.BROWSE
         self.model.set_results(results)
         self._update_empty_state()
@@ -608,6 +714,7 @@ class CatalogView(QWidget):
         if detail is None:
             return False
         self._current_id = question_id
+        self._outside = None
         self.detail_view.show_question(detail)
         self._select_current_in_list(scroll=scroll)
         self._update_navigation()
@@ -623,20 +730,32 @@ class CatalogView(QWidget):
         self.contextChanged.emit(self._filter.subject_code, self._filter.status, self.current_uid)
 
     # ------------------------------------------------------------------ previous / next
+    def next_target(self) -> int | None:
+        results = self.model.results
+        if self._outside is not None and self._current_id not in results:
+            return self._outside[1]
+        return results.next_id(self._current_id)
+
+    def previous_target(self) -> int | None:
+        results = self.model.results
+        if self._outside is not None and self._current_id not in results:
+            return self._outside[0]
+        return results.previous_id(self._current_id)
+
     def next_question(self) -> None:
-        target = self.model.results.next_id(self._current_id)
+        target = self.next_target()
         if target is not None:
             self.open_question(target)
 
     def previous_question(self) -> None:
-        target = self.model.results.previous_id(self._current_id)
+        target = self.previous_target()
         if target is not None:
             self.open_question(target)
 
     def _update_navigation(self) -> None:
         results = self.model.results
-        self.next_button.setEnabled(results.next_id(self._current_id) is not None)
-        self.prev_button.setEnabled(results.previous_id(self._current_id) is not None)
+        self.next_button.setEnabled(self.next_target() is not None)
+        self.prev_button.setEnabled(self.previous_target() is not None)
         position = results.position_of(self._current_id)
         total = format_count(len(results))
         if self._current_id is None or not len(results):
@@ -649,6 +768,38 @@ class CatalogView(QWidget):
             )
 
     # ------------------------------------------------------------------ go to a question
+    def focus_content(self) -> None:
+        """Put the keyboard focus inside this page (its shortcuts only work from inside): the editor
+        while editing, otherwise the question list. Focus that is already inside stays where it is."""
+        focused = QApplication.focusWidget()
+        if focused is not None and (focused is self or self.isAncestorOf(focused)):
+            return
+        if self.is_editing and self._editing is not None:
+            self._editing.editor.stem_edit.setFocus(Qt.FocusReason.OtherFocusReason)
+        elif self._list_stack.currentWidget() is self.list_view:
+            self.list_view.setFocus(Qt.FocusReason.OtherFocusReason)
+        else:
+            self.search_edit.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def focus_list(self) -> None:
+        """Keyboard focus to the question list (then ↑/↓ open questions)."""
+        if self._list_stack.currentWidget() is self.list_view:
+            self.list_view.setFocus(Qt.FocusReason.ShortcutFocusReason)
+            if not self.list_view.currentIndex().isValid() and self.model.rowCount():
+                self.open_question(self.model.question_id_at(0) or 0)
+
+    def _set_accessible_names(self) -> None:
+        self.list_view.setAccessibleName(strings.CAT_LIST_NAME)
+        self.search_edit.setAccessibleName(strings.CAT_SEARCH_NAME)
+        self.goto_edit.setAccessibleName(strings.CAT_GOTO_NAME)
+        self.goto_button.setAccessibleName(strings.CAT_GOTO_NAME)
+        self.subject_combo.setAccessibleName(strings.CAT_SUBJECT_NAME)
+        self.sort_combo.setAccessibleName(strings.CAT_SORT_NAME)
+        self.prev_button.setAccessibleName(strings.ACTION_PREVIOUS)
+        self.next_button.setAccessibleName(strings.ACTION_NEXT)
+        self.prev_button.setToolTip(f"{strings.ACTION_PREVIOUS} (Alt+←)")
+        self.next_button.setToolTip(f"{strings.ACTION_NEXT} (Alt+→)")
+
     def focus_search(self) -> None:
         self.search_edit.setFocus(Qt.FocusReason.ShortcutFocusReason)
         self.search_edit.selectAll()
@@ -736,6 +887,8 @@ class CatalogView(QWidget):
             self.show_notice(text)
 
     def refresh(self) -> None:
-        """Re-run the current filter (after an import); the open question stays open."""
+        """Re-run the current filter (after an import or a decision); the open question stays open,
+        and if it no longer matches the filter, next / previous continue from where it was."""
+        self._anchor_from = self.model.results
         self._apply_filter()
         self._update_navigation()

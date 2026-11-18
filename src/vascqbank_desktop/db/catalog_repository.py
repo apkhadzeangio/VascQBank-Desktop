@@ -63,7 +63,9 @@ _DOCUMENT_SQL = (
 _PREVIEW_STEM_CHARS = 600
 
 
-def _filters(subject_code: str | None, status: ReviewStatus | None) -> tuple[list[str], list[object]]:
+def _filters(
+    subject_code: str | None, status: ReviewStatus | None, drafts_only: bool = False
+) -> tuple[list[str], list[object]]:
     clauses: list[str] = []
     params: list[object] = []
     if subject_code is not None:
@@ -72,6 +74,8 @@ def _filters(subject_code: str | None, status: ReviewStatus | None) -> tuple[lis
     if status is not None:
         clauses.append("q.status = ?")
         params.append(status.value)
+    if drafts_only:  # drafts.question_id is UNIQUE, so this is an index lookup per question
+        clauses.append("EXISTS (SELECT 1 FROM drafts d WHERE d.question_id = q.id)")
     return clauses, params
 
 
@@ -102,15 +106,21 @@ def list_ids(
     subject_code: str | None,
     status: ReviewStatus | None,
     sort: SortOrder = SortOrder.NUMBER,
+    *,
+    drafts_only: bool = False,
 ) -> list[int]:
-    clauses, params = _filters(subject_code, status)
+    clauses, params = _filters(subject_code, status, drafts_only)
     return _ids(conn, _BROWSE_FROM, clauses, params, sort)
 
 
 def count_matching(
-    conn: sqlite3.Connection, subject_code: str | None, status: ReviewStatus | None
+    conn: sqlite3.Connection,
+    subject_code: str | None,
+    status: ReviewStatus | None,
+    *,
+    drafts_only: bool = False,
 ) -> int:
-    clauses, params = _filters(subject_code, status)
+    clauses, params = _filters(subject_code, status, drafts_only)
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     return int(conn.execute(f"SELECT count(*) FROM questions q{where}", params).fetchone()[0])
 
@@ -121,9 +131,11 @@ def search_ids_like(
     subject_code: str | None,
     status: ReviewStatus | None,
     sort: SortOrder = SortOrder.NUMBER,
+    *,
+    drafts_only: bool = False,
 ) -> list[int]:
     """Substring search without any index: every term must occur in the document text."""
-    clauses, params = _filters(subject_code, status)
+    clauses, params = _filters(subject_code, status, drafts_only)
     term_clauses = [f"({_DOCUMENT_SQL}) LIKE ? ESCAPE '\\'" for _ in terms]
     term_params: list[object] = [like_pattern(t) for t in terms]
     return _ids(conn, _CURRENT_FROM, [*term_clauses, *clauses], [*term_params, *params], sort)
@@ -135,9 +147,11 @@ def search_ids_fts(
     subject_code: str | None,
     status: ReviewStatus | None,
     sort: SortOrder = SortOrder.NUMBER,
+    *,
+    drafts_only: bool = False,
 ) -> list[int]:
     """Search through the attached derived index (see :mod:`vascqbank_desktop.db.search_index`)."""
-    clauses, params = _filters(subject_code, status)
+    clauses, params = _filters(subject_code, status, drafts_only)
     clauses.append(f"q.id IN (SELECT rowid FROM {INDEX_SCHEMA}.docs WHERE docs MATCH ?)")
     params.append(match_expression)
     return _ids(conn, _BROWSE_FROM, clauses, params, sort)

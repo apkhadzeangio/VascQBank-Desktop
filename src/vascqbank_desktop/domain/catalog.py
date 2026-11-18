@@ -34,6 +34,7 @@ class CatalogFilter:
     status: ReviewStatus | None = None
     text: str = ""
     sort: SortOrder = SortOrder.NUMBER
+    drafts_only: bool = False  # only questions with an unfinished draft (Phase 8 quick filter)
 
     @property
     def terms(self) -> tuple[str, ...]:

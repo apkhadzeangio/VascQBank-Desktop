@@ -1,9 +1,10 @@
 """Backup page: create a verified backup, see every backup and whether it still verifies.
 
 Creating and verifying run on background threads (a backup of a large database
-takes a moment). There is deliberately no "restore" button: replacing the live
-database needs its own safety design and tests, so this page only creates,
-lists and verifies — it never overwrites the current database.
+takes a moment). "Restore" only *asks* the main window to open the restore dialog
+(:mod:`vascqbank_desktop.ui.restore_dialog`), which verifies the backup again,
+shows what it holds and needs an explicit confirmation; this page never changes
+the working database itself.
 """
 
 from __future__ import annotations
@@ -45,6 +46,7 @@ _KIND_LABELS: dict[BackupKind, str] = {
     BackupKind.MANUAL: strings.BK_KIND_MANUAL,
     BackupKind.BEFORE_IMPORT: strings.BK_KIND_IMPORT,
     BackupKind.BEFORE_MIGRATION: strings.BK_KIND_MIGRATION,
+    BackupKind.BEFORE_RESTORE: strings.BK_KIND_RESTORE,
     BackupKind.OTHER: strings.BK_KIND_OTHER,
 }
 _PROBLEM_LABELS: dict[BackupProblem, str] = {
@@ -72,6 +74,7 @@ def status_text(entry: BackupEntry, *, checking: bool = False) -> str:
 
 class BackupView(QWidget):
     backupCreated = Signal(object)  # BackupEntry
+    restoreRequested = Signal(object)  # Path of the selected backup (or None)
 
     def __init__(self, paths: AppPaths, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -100,9 +103,14 @@ class BackupView(QWidget):
         self.folder_button = QPushButton(strings.BK_OPEN_FOLDER)
         self.folder_button.setObjectName("SecondaryButton")
         self.folder_button.clicked.connect(self.open_folder)
+        self.restore_button = QPushButton(strings.BK_RESTORE)
+        self.restore_button.setObjectName("SecondaryButton")
+        self.restore_button.setToolTip(strings.BK_RESTORE_TOOLTIP)
+        self.restore_button.clicked.connect(self.request_restore)
         for button in (self.create_button, self.verify_button, self.folder_button):
             buttons.addWidget(button)
         buttons.addStretch(1)
+        buttons.addWidget(self.restore_button)
         page.addLayout(buttons)
 
         self.status_label = QLabel()
@@ -135,7 +143,12 @@ class BackupView(QWidget):
         for column in (COL_TIME, COL_KIND, COL_QUESTIONS, COL_SIZE):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(COL_STATUS, QHeaderView.ResizeMode.Stretch)
+        self.table.setAccessibleName(strings.BK_TITLE)
+        self.table.itemSelectionChanged.connect(self._on_selection)
+        self.table.doubleClicked.connect(lambda _index: self.request_restore())
         page.addWidget(self.table, 1)
+        self.selected_label = make_label(strings.BK_SELECT_HINT, "ResultInfo")
+        page.addWidget(self.selected_label)
 
         self.empty_label = make_label(strings.BK_EMPTY, "EmptyListMessage")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -160,6 +173,10 @@ class BackupView(QWidget):
     def is_busy(self) -> bool:
         return self._create_job is not None or self._verify_job is not None
 
+    def is_creating(self) -> bool:
+        """A backup of the live database is being written (verifying only reads backup files)."""
+        return self._create_job is not None
+
     def refresh(self, *, auto_verify: bool = True) -> None:
         """Re-read the backup folder; backups not verified yet are verified in the background."""
         listed = backup_service.list_backup_entries(self._paths)
@@ -174,9 +191,15 @@ class BackupView(QWidget):
             self.verify_all(force=False)
 
     def _render(self) -> None:
+        selected = self.selected_entry
+        self.table.blockSignals(True)
         self.table.setRowCount(len(self._entries))
         for row, entry in enumerate(self._entries):
             self._fill_row(row, entry)
+            if selected is not None and entry.name == selected.name:
+                self.table.selectRow(row)
+        self.table.blockSignals(False)
+        self._on_selection()
         self.empty_label.setVisible(not self._entries)
         self.table.setVisible(bool(self._entries))
         self.summary_label.setText(strings.BK_SUMMARY.format(count=format_count(len(self._entries))))
@@ -211,6 +234,48 @@ class BackupView(QWidget):
         busy = self.is_busy()
         self.create_button.setEnabled(self._create_job is None)
         self.verify_button.setEnabled(not busy and bool(self._entries))
+        entry = self.selected_entry
+        self.restore_button.setEnabled(
+            not self.is_creating() and entry is not None and entry.status is not VerificationStatus.FAILED
+        )
+
+    # ------------------------------------------------------------------ selection / restore
+    @property
+    def selected_entry(self) -> BackupEntry | None:
+        rows = self.table.selectionModel().selectedRows()
+        if not rows or not 0 <= rows[0].row() < len(self._entries):
+            return None
+        return self._entries[rows[0].row()]
+
+    def select_backup(self, name: str) -> bool:
+        for row, entry in enumerate(self._entries):
+            if entry.name == name:
+                self.table.selectRow(row)
+                return True
+        return False
+
+    def _on_selection(self) -> None:
+        entry = self.selected_entry
+        if entry is None:
+            self.selected_label.setText(strings.BK_SELECT_HINT)
+        else:
+            count = "—" if entry.question_count is None else format_count(entry.question_count)
+            self.selected_label.setText(
+                strings.BK_SELECTED.format(
+                    time=format_timestamp(entry.created_at), kind=_KIND_LABELS[entry.kind], questions=count
+                )
+            )
+        self._update_buttons()
+
+    def request_restore(self) -> None:
+        """Ask for the restore dialog with the selected backup (the dialog checks and confirms)."""
+        entry = self.selected_entry
+        if entry is None or self.is_creating():
+            return
+        self.restoreRequested.emit(entry.path)
+
+    def show_message(self, text: str, *, error: bool = False) -> None:
+        self._set_status(text, error=error)
 
     # ------------------------------------------------------------------ verification
     def verify_all(self, *, force: bool) -> None:

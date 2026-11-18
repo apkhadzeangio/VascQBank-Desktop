@@ -504,14 +504,27 @@ def test_a_failed_backup_is_reported_and_changes_nothing(
     assert snapshot(populated) == before
 
 
-def test_there_is_no_restore_button_only_an_honest_note(window: MainWindow) -> None:
+def test_restore_is_only_a_request_for_the_confirming_dialog(qtbot, window: MainWindow, populated) -> None:
+    """Phase 8 replaced "no restore button" by a restore that always needs the dialog's explicit
+    confirmation: the button only emits a request; the database is never changed by the page."""
     from PySide6.QtWidgets import QAbstractButton
 
     view = window.backup_view
     window.show_page(PAGE_BACKUPS)
     labels = {b.text() for b in view.findChildren(QAbstractButton) if b.isVisibleTo(view) and b.text()}
-    assert labels == {strings.BK_CREATE, strings.BK_VERIFY_ALL, strings.BK_OPEN_FOLDER}
-    assert not any("აღდგენა" in label for label in labels)  # "restore" is not offered as an action
+    assert labels == {strings.BK_CREATE, strings.BK_VERIFY_ALL, strings.BK_OPEN_FOLDER, strings.BK_RESTORE}
+    assert not view.restore_button.isEnabled()  # nothing selected yet
+    view.create_backup()
+    qtbot.waitUntil(lambda: not view.is_busy(), timeout=WAIT_MS)
+    before = snapshot(populated)
+    requested: list[object] = []
+    view.restoreRequested.disconnect()
+    view.restoreRequested.connect(requested.append)
+    view.table.selectRow(0)
+    assert view.restore_button.isEnabled()
+    view.restore_button.click()
+    assert requested == [view.entries[0].path]
+    assert snapshot(populated) == before
     assert view.restore_note.text() == strings.BK_RESTORE_NOTE
 
 

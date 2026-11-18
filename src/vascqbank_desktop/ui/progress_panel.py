@@ -97,13 +97,19 @@ class _Scope(QWidget):
             self.status_labels[status] = number
             grid.addWidget(number, 1, column)
             grid.addWidget(make_label(status.label_ka, "StatCaption"), 2, column, Qt.AlignmentFlag.AlignTop)
-        for column in range(6):
+        drafts_column = len(ReviewStatus) + 1
+        self.drafts_label = make_label("0", "StatNumber", wrap=False)
+        grid.addWidget(self.drafts_label, 1, drafts_column)
+        grid.addWidget(
+            make_label(strings.PROG_DRAFTS, "StatCaption"), 2, drafts_column, Qt.AlignmentFlag.AlignTop
+        )
+        for column in range(drafts_column + 1):
             grid.setColumnStretch(column, 1)
 
         self.bar = StatusBar()
-        grid.addWidget(self.bar, 3, 0, 1, 6)
+        grid.addWidget(self.bar, 3, 0, 1, drafts_column + 1)
         self.share_label = make_label("", "ScopeNote", wrap=False)
-        grid.addWidget(self.share_label, 4, 0, 1, 6)
+        grid.addWidget(self.share_label, 4, 0, 1, drafts_column + 1)
 
     def set_title(self, title: str) -> None:
         self.title_label.setText(title)
@@ -112,6 +118,7 @@ class _Scope(QWidget):
         self.total_label.setText(format_count(summary.total))
         for status, label in self.status_labels.items():
             label.setText(format_count(summary.count(status)))
+        self.drafts_label.setText(format_count(summary.drafts))
         self.bar.set_summary(summary)
         self.share_label.setText(strings.PROG_SHARE.format(percent=format_percent(summary.approved_share)))
 
@@ -168,7 +175,11 @@ class _StripRow:
             label.setTextFormat(Qt.TextFormat.RichText)
             self.status_labels[status] = label
             grid.addWidget(label, row, column)
-        self.widgets = [self.scope_label, self.total_label, *self.status_labels.values()]
+        self.drafts_label = QLabel()
+        self.drafts_label.setObjectName("StripCount")
+        self.drafts_label.setTextFormat(Qt.TextFormat.RichText)
+        grid.addWidget(self.drafts_label, row, len(ReviewStatus) + 2)
+        self.widgets = [self.scope_label, self.total_label, *self.status_labels.values(), self.drafts_label]
 
     def set_visible(self, visible: bool) -> None:
         for widget in self.widgets:
@@ -181,6 +192,7 @@ class _StripRow:
         for status, label in self.status_labels.items():
             dot = f'<span style="color:{theme.STATUS_BAR_COLORS[status]}">●</span>'
             label.setText(f"{dot} {SHORT_LABELS[status]}: <b>{format_count(summary.count(status))}</b>")
+        self.drafts_label.setText(f"✎ {strings.PROG_SHORT_DRAFTS}: <b>{format_count(summary.drafts)}</b>")
 
 
 class ProgressStrip(QFrame):
@@ -195,7 +207,7 @@ class ProgressStrip(QFrame):
         grid.setVerticalSpacing(2)
         grid.setColumnMinimumWidth(0, 100)
         grid.setColumnMinimumWidth(1, 92)
-        for column in range(2, 6):
+        for column in range(2, len(ReviewStatus) + 3):
             grid.setColumnStretch(column, 1)
         self.bank_line = _StripRow(grid, 0)
         self.subject_line = _StripRow(grid, 1)

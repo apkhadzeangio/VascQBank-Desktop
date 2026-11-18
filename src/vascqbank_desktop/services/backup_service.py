@@ -1,9 +1,7 @@
 """Backups for the UI: create a verified backup, list them, re-verify them.
 
-Restoring a backup over the live database is deliberately **not** offered yet:
-it replaces the user's work, so it needs its own safety-copy, connection
-hand-over and crash-recovery design (ARCHITECTURE.md §10). Until then backups
-are listed, verified and kept safe; the live database is never overwritten.
+Restoring a backup is :mod:`vascqbank_desktop.services.restore_service` (Phase 8): it has its own
+safety backup, connection hand-over and crash-recovery protocol (ARCHITECTURE.md §28).
 """
 
 from __future__ import annotations
@@ -42,6 +40,7 @@ class BackupKind(StrEnum):
     MANUAL = "MANUAL"
     BEFORE_IMPORT = "BEFORE_IMPORT"
     BEFORE_MIGRATION = "BEFORE_MIGRATION"
+    BEFORE_RESTORE = "BEFORE_RESTORE"  # the safety backup taken before a restore; never pruned
     OTHER = "OTHER"
 
 
@@ -76,6 +75,8 @@ def _kind(reason: str) -> BackupKind:
         return BackupKind.BEFORE_IMPORT
     if reason.startswith("pre-migration"):
         return BackupKind.BEFORE_MIGRATION
+    if reason.startswith("pre-restore"):
+        return BackupKind.BEFORE_RESTORE
     return BackupKind.OTHER
 
 
@@ -98,12 +99,16 @@ def _entry(path: Path) -> BackupEntry:
         size = path.stat().st_size
     except OSError:
         size = 0
+    counts = manifest.get("table_counts") if manifest else None
+    questions = counts.get("questions") if isinstance(counts, dict) else None
     return BackupEntry(
         path=path,
         kind=_kind(match["reason"]) if match else BackupKind.OTHER,
         created_at=created if isinstance(created, str) else _created_from_name(path.name),
         size=size,
         has_manifest=manifest is not None,
+        # as recorded in the manifest (shown before verification; replaced by the verified count)
+        question_count=questions if isinstance(questions, int) else None,
     )
 
 

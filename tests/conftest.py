@@ -38,10 +38,12 @@ def styled_qapp():
     from PySide6.QtWidgets import QApplication
 
     from vascqbank_desktop.ui.fonts import build_ui_font, register_bundled_fonts
+    from vascqbank_desktop.ui.localization import install_translations
     from vascqbank_desktop.ui.theme import apply_theme
 
     app = QApplication.instance() or QApplication([])
     register_bundled_fonts()
     app.setFont(build_ui_font())
     apply_theme(app)
+    install_translations(app)  # as in the real program: Qt's own texts in Georgian
     return app

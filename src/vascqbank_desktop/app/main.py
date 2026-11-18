@@ -41,6 +41,11 @@ EXIT_INTEGRITY_PROBLEM = 1
 EXIT_STORAGE_ERROR = 2
 EXIT_RECOVERY_NEEDED = 3  # no database, but traces of an earlier one: nothing was created
 EXIT_SEED_INVALID = 4  # the bundled seed failed verification: nothing was created
+EXIT_RESTORE_INTERRUPTED = 5  # an interrupted restore needs the reviewer's decision: nothing was changed
+EXIT_ALREADY_RUNNING = 6  # another instance uses the same data folder
+LOCK_NAME = "vascqbank.lock"
+
+_LOCKS: list[object] = []
 
 STORAGE_ERRORS: tuple[type[BaseException], ...] = (DatabaseError, OSError, sqlite3.Error)
 
@@ -118,6 +123,19 @@ def run_self_check(paths: AppPaths, seed_dir: Path | None = None) -> int:
     if result.outcome is Outcome.SEED_INVALID:
         print(f"SEED INVALID: {result.seed_problem}; nothing was created", file=sys.stderr)
         return EXIT_SEED_INVALID
+    if result.outcome is Outcome.RESTORE_INTERRUPTED:
+        recovery = result.restore_recovery
+        print(
+            f"RESTORE INTERRUPTED: {recovery.detail if recovery else ''}; nothing was changed:",
+            file=sys.stderr,
+        )
+        for path in recovery.candidates if recovery else ():
+            print(f"  {path}", file=sys.stderr)
+        return EXIT_RESTORE_INTERRUPTED
+    if result.restore_recovery is not None:
+        print(
+            f"Interrupted restore: {result.restore_recovery.outcome.value} ({result.restore_recovery.detail})"
+        )
     status = result.status
     assert status is not None
     print(format_self_check(status))
@@ -170,7 +188,7 @@ def install_signal_shutdown(app, window) -> dict[int, object]:  # noqa: ANN001
 
 
 def ask_recovery(evidence: Sequence[Evidence], data_dir: Path, exit_after_ms: int = 0) -> str:
-    """The Georgian recovery dialog: ``"open"``, ``"new"`` (confirmed twice) or ``"exit"``."""
+    """The Georgian recovery dialog: ``"restore"``, ``"open"``, ``"new"`` (confirmed twice) or ``"exit"``."""
     from PySide6.QtCore import QTimer, QUrl
     from PySide6.QtGui import QDesktopServices
     from PySide6.QtWidgets import QMessageBox
@@ -182,6 +200,8 @@ def ask_recovery(evidence: Sequence[Evidence], data_dir: Path, exit_after_ms: in
     lines += ["", strings.RECOVERY_HOWTO]
     box = QMessageBox(QMessageBox.Icon.Warning, strings.RECOVERY_TITLE, "\n".join(lines))
     box.setDetailedText("\n".join(str(p) for e in evidence for p in e.paths))
+    restore_button = box.addButton(strings.RECOVERY_RESTORE, QMessageBox.ButtonRole.ActionRole)
+    restore_button.setEnabled(any(e.kind.value == "BACKUPS" for e in evidence))
     open_button = box.addButton(strings.RECOVERY_OPEN_FOLDER, QMessageBox.ButtonRole.AcceptRole)
     new_button = box.addButton(strings.RECOVERY_NEW, QMessageBox.ButtonRole.DestructiveRole)
     exit_button = box.addButton(strings.RECOVERY_EXIT, QMessageBox.ButtonRole.RejectRole)
@@ -190,6 +210,8 @@ def ask_recovery(evidence: Sequence[Evidence], data_dir: Path, exit_after_ms: in
         QTimer.singleShot(exit_after_ms, box.reject)
     box.exec()
     clicked = box.clickedButton()
+    if clicked is restore_button:
+        return "restore"
     if clicked is open_button:
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(data_dir)))
         return "open"
@@ -203,6 +225,73 @@ def ask_recovery(evidence: Sequence[Evidence], data_dir: Path, exit_after_ms: in
         )
         return "new" if confirm == QMessageBox.StandardButton.Yes else "exit"
     return "exit"
+
+
+def ask_restore(paths: AppPaths, exit_after_ms: int = 0) -> bool:
+    """The restore dialog for a missing database; ``True`` once a backup was restored and verified."""
+    from PySide6.QtCore import QTimer
+
+    from vascqbank_desktop.ui.restore_dialog import RestoreDialog
+
+    dialog = RestoreDialog(paths, current=None)
+    if exit_after_ms:
+        QTimer.singleShot(exit_after_ms, dialog.reject)
+    dialog.exec()
+    return dialog.result_value is not None
+
+
+def show_interrupted_restore(result: StartupResult, data_dir: Path, exit_after_ms: int = 0) -> None:
+    from PySide6.QtCore import QTimer, QUrl
+    from PySide6.QtGui import QDesktopServices
+    from PySide6.QtWidgets import QMessageBox
+
+    from vascqbank_desktop.ui import strings
+
+    recovery = result.restore_recovery
+    box = QMessageBox(
+        QMessageBox.Icon.Critical, strings.RESTORE_INTERRUPTED_TITLE, strings.RESTORE_INTERRUPTED_TEXT
+    )
+    if recovery is not None:
+        box.setDetailedText("\n".join([recovery.detail, "", *(str(p) for p in recovery.candidates)]))
+    open_button = box.addButton(strings.RECOVERY_OPEN_FOLDER, QMessageBox.ButtonRole.AcceptRole)
+    exit_button = box.addButton(strings.RECOVERY_EXIT, QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(exit_button)
+    if exit_after_ms:
+        QTimer.singleShot(exit_after_ms, box.reject)
+    box.exec()
+    if box.clickedButton() is open_button:
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(data_dir)))
+
+
+def show_restore_notice(recovery: object, exit_after_ms: int = 0) -> None:
+    """An interrupted restore was finished or undone at start-up: say which, once."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QMessageBox
+
+    from vascqbank_desktop.services.restore_service import RecoveryOutcome, RestoreRecovery
+    from vascqbank_desktop.ui import strings
+
+    assert isinstance(recovery, RestoreRecovery)
+    if recovery.outcome is RecoveryOutcome.COMPLETED:
+        text = strings.RESTORE_COMPLETED.format(name=recovery.backup or "—")
+    elif recovery.outcome is RecoveryOutcome.ROLLED_BACK:
+        text = strings.RESTORE_ROLLED_BACK
+    else:
+        return
+    box = QMessageBox(QMessageBox.Icon.Information, strings.RESTORE_INTERRUPTED_TITLE, text)
+    if exit_after_ms:
+        QTimer.singleShot(exit_after_ms, box.accept)
+    box.exec()
+
+
+def acquire_instance_lock(paths: AppPaths):  # noqa: ANN201 - QLockFile | None
+    """One running program per data folder: a second one would write to the same database."""
+    from PySide6.QtCore import QLockFile
+
+    paths.data_dir.mkdir(parents=True, exist_ok=True)
+    lock = QLockFile(str(paths.data_dir / LOCK_NAME))
+    lock.setStaleLockTime(0)  # held for the whole session: stale only when its process is gone
+    return lock if lock.tryLock(0) else None
 
 
 def startup(paths: AppPaths, seed_dir: Path | None, exit_after_ms: int = 0) -> StartupResult | int:
@@ -220,15 +309,27 @@ def startup(paths: AppPaths, seed_dir: Path | None, exit_after_ms: int = 0) -> S
         QApplication.processEvents()
     try:
         result = prepare_storage(paths, seed_dir)
-        if result.outcome is Outcome.RECOVERY_NEEDED:
+        notice = result.restore_recovery
+        while result.outcome is Outcome.RECOVERY_NEEDED:
             if splash is not None:
                 splash.close()
-            if ask_recovery(result.evidence, paths.data_dir, exit_after_ms) != "new":
+            choice = ask_recovery(result.evidence, paths.data_dir, exit_after_ms)
+            if choice == "restore":
+                if ask_restore(paths, exit_after_ms):
+                    notice = None
+                    result = prepare_storage(paths, seed_dir)
+                continue  # cancelled or refused: the same question again
+            if choice != "new":
                 return EXIT_RECOVERY_NEEDED
             result = prepare_storage(paths, seed_dir, allow_new_database=True)
     finally:
         if splash is not None:
             splash.close()
+    if result.outcome is Outcome.RESTORE_INTERRUPTED:
+        show_interrupted_restore(result, paths.data_dir, exit_after_ms)
+        return EXIT_RESTORE_INTERRUPTED
+    if notice is not None and result.outcome is Outcome.READY:
+        show_restore_notice(notice, exit_after_ms)
     if result.outcome is Outcome.SEED_INVALID:
         box = QMessageBox(QMessageBox.Icon.Critical, strings.SEED_INVALID_TITLE, strings.SEED_INVALID_TEXT)
         box.setDetailedText(f"{result.seed_problem}\n\n{seed_dir}")
@@ -250,6 +351,7 @@ def run_gui(
     from vascqbank_desktop.domain.subjects import SUBJECTS
     from vascqbank_desktop.ui import strings
     from vascqbank_desktop.ui.fonts import build_ui_font, register_bundled_fonts
+    from vascqbank_desktop.ui.localization import install_translations
     from vascqbank_desktop.ui.main_window import MainWindow
     from vascqbank_desktop.ui.theme import apply_theme
 
@@ -263,9 +365,21 @@ def run_gui(
     log.info("Bundled font families: %s", ", ".join(families) or "none")
     app.setFont(build_ui_font())
     apply_theme(app)
+    install_translations(app)  # Georgian for Qt's own buttons and "Show Details..."
 
     icon = QIcon(str(resources.resource_path("icons", "app.svg")))
     app.setWindowIcon(icon)
+
+    instance_lock = acquire_instance_lock(paths)
+    if instance_lock is None:
+        box = QMessageBox(
+            QMessageBox.Icon.Warning, strings.ALREADY_RUNNING_TITLE, strings.ALREADY_RUNNING_TEXT
+        )
+        if exit_after_ms:
+            QTimer.singleShot(exit_after_ms, box.reject)
+        box.exec()
+        return EXIT_ALREADY_RUNNING
+    _LOCKS.append(instance_lock)  # released when the process ends
 
     try:
         prepared = startup(paths, seed_dir, exit_after_ms)
