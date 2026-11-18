@@ -1680,6 +1680,7 @@ migration** (schema v3 stays current; existing working databases need no convers
 | D7 | `--self-check` ran restore/seed recovery without the instance lock | recovery racing a running program on the same data folder | `QLockFile` taken first; exit code **6** if held | `test_phase9_security` |
 | D8 | import commit used WAL's default `synchronous=NORMAL` | a just-confirmed import could be lost on power failure (not on a program crash) | `make_durable` on the import connection | `test_phase9_crash` |
 | D9 | half-written backup files from interrupted backups accumulated | clutter; never shown, but never removed | `remove_stale_leftovers` (exact names only, older than 1 h) before the automatic backup | `test_backup_portability` |
+| D10 | seed installation called `os.fsync` on a read-only handle (pre-existing since Phase 7) | on Windows `fsync` needs write access (`EBADF`): first launch with a seed always failed with exit 2 — no data at risk, the half-installed copy was cleaned up | open the copy `rb+` before `fsync` | `test_first_launch`, `test_seed_install` on the Windows CI job |
 
 No defect was found that silently overwrote or discarded a confirmed edit, review decision or saved
 draft. No release-blocking data-loss defect remains open.
@@ -1829,7 +1830,8 @@ and finally closes the window and checks the database. Results of the Phase 9 ru
 | Platform / medium | Status |
 |---|---|
 | Linux (Debian 12, kernel 6.12), Python 3.12, PySide6 6.12, Qt offscreen | tested (full suite, soak, release check) |
-| Windows 10/11 | NOT TESTED (Windows-specific code paths reviewed only) |
+| Windows (GitHub `windows-latest` runner, Python 3.12, Qt offscreen) | automated suite (`-m "not perf"`) in CI — see §43.1 |
+| Windows 10/11 desktop (real display, antivirus, Explorer) | NOT TESTED |
 | Linux X11 / Wayland desktop session, CachyOS | NOT TESTED |
 | FAT32 / exFAT / USB / network drives | NOT TESTED |
 | Microsoft Word, LibreOffice rendering | NOT TESTED (python-docx + pandoc only) |
@@ -1837,7 +1839,7 @@ and finally closes the window and checks the database. Results of the Phase 9 ru
 
 ## 43. Phase 9 results, remaining risks and Phase 10 handoff
 
-### 43.1 Measured results (Linux, Debian 12, 2 CPUs, 8 GB, Qt offscreen)
+### 43.1 Measured results (Linux, Debian 12, 2 CPUs, 8 GB, Qt offscreen — plus GitHub Actions CI)
 
 | Check | Result |
 |---|---|
@@ -1850,6 +1852,14 @@ and finally closes the window and checks the database. Results of the Phase 9 ru
 | Crash/interruption (`test_phase9_crash.py` + earlier crash suites) | passed |
 | Soak test (`--minutes 20 --questions 2000 --seed 9`) | passed: 1,200 s, ≈ 8,300 actions, 0 failures |
 | GUI stress: 14 GUI-heavy test files × 5 fresh runs | 5 × 322 passed, 0 failures, no flaky test seen |
+| GitHub Actions `ubuntu-latest` (`-m "not perf"`, run 44386105979) | 1,162 passed, 1 skipped, lint passed |
+| GitHub Actions `windows-latest` (`-m "not perf"`, run 44386105979) | 1,071 passed, 93 skipped, lint passed |
+
+The Windows skips are tests explicitly marked POSIX-only: the SIGKILL-based crash suites (restore,
+review, GUI, export publication, seed installation), symbolic-link and POSIX-permission cases, and
+POSIX signal handling. The Phase 9 crash matrix (`test_phase9_crash.py`) and `test_crash_recovery.py`
+do run on Windows, using `TerminateProcess`. The first Windows CI runs failed and led to D10 (§35) and
+to the test portability fixes listed in §43.2; earlier runs are kept in the Actions history.
 
 Soak details (single uninterrupted 20-minute run): heartbeat lateness p99 32 ms, max 79 ms (the GUI
 thread never blocked noticeably); RSS 119 MB at start, 128 MB after warm-up, 138 MB at the end
@@ -1862,8 +1872,9 @@ discarded because its working folder was deleted by the operator during the run 
 
 ### 43.2 Remaining risks (not release blockers)
 
-- **Windows** was not run on a real machine in Phase 9 (only reviewed; the CI workflow added in
-  `.github/workflows/ci.yml` runs the suite on `windows-latest` — its result is the only Windows evidence).
+- **Windows 10/11 desktop** was not run on a real machine in Phase 9. The only Windows evidence is the
+  GitHub `windows-latest` CI job (§43.1), which found D10, POSIX-only assumptions in four test files
+  (`resource`, `SIGKILL`, `time.tzset`, a POSIX absolute path) and one timing-sensitive autosave test.
   A sharing violation caused by antivirus/indexers while replacing the database or renaming an export
   folder is not retried: the operation fails, its intent journal stays, and the next start reconciles
   it (export) or stops safely and asks for recovery (restore). This has not been observed on Windows.
