@@ -92,7 +92,7 @@ def _db_rows(paths: AppPaths) -> dict[str, list[tuple]] | None:
 def _files(root: Path) -> list[str]:
     ignored = ("logs", "search")
     return sorted(
-        str(p.relative_to(root))
+        p.relative_to(root).as_posix()
         for p in root.rglob("*")
         if p.is_file()
         and not p.name.endswith(("-wal", "-shm"))

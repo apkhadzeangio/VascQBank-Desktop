@@ -29,6 +29,7 @@ until publication starts.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import logging
 import os
@@ -450,7 +451,13 @@ class ExportService:
                         report(ExportPhase.DOCX, _base + count, total, _name)
 
                 document = build_docx(chosen, edition, meta, font=request.font, progress=tick)
-                document.save(str(staging / relative))
+                # Phase 9b (D22): rendered in memory, written through a file that is always closed.
+                # python-docx's own save left its zip handle open while a write error propagated, so
+                # on Windows the staging folder could not be removed after a failed export.
+                buffer = io.BytesIO()
+                document.save(buffer)
+                with (staging / relative).open("wb") as handle:
+                    handle.write(buffer.getbuffer())
                 done += sum(len(b.questions) for b in chosen)
                 report(ExportPhase.DOCX, done, total, relative)
                 written.append((relative, "DOCX", (edition, chosen)))

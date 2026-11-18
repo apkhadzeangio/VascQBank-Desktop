@@ -64,7 +64,7 @@ def _report_is_sound(report: import_service.DryRunReport) -> None:
 
 # ----------------------------------------------------------------------------------- D16
 def test_control_characters_make_a_question_invalid_at_import(paths: AppPaths, tmp_path: Path) -> None:
-    folder = _pair(tmp_path / "nul", GOOD_Q.replace(b"\n", b"\x00\n", 1))
+    folder = _pair(tmp_path / "nul-bytes", GOOD_Q.replace(b"\n", b"\x00\n", 1))
     report = import_service.dry_run(paths, [folder])
     _report_is_sound(report)
     bad = [c for c in report.candidates if c.uid == "ALI-0001"][0]
@@ -111,7 +111,7 @@ def test_a_20_megabyte_line_is_handled_quickly_and_refused(paths: AppPaths, tmp_
 def test_encodings_and_line_ends(
     paths: AppPaths, tmp_path: Path, name: str, questions: bytes, explanations: bytes, eligible: int
 ) -> None:
-    report = import_service.dry_run(paths, [_pair(tmp_path / name, questions, explanations)])
+    report = import_service.dry_run(paths, [_pair(tmp_path / f"case-{name}", questions, explanations)])
     _report_is_sound(report)
     assert report.counts.eligible == eligible, [i.message for i in report.all_issues()][:3]
     if eligible == 0:

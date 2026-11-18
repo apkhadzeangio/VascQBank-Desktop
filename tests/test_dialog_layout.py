@@ -255,12 +255,13 @@ if not CHILD:
         )  # fmt: skip
         env = {
             **os.environ,
-            "QT_QPA_PLATFORM": f"offscreen:configfile={screen}",
+            # relative: a Windows drive letter's colon would split Qt's "platform:option" string
+            "QT_QPA_PLATFORM": "offscreen:configfile=screen.json",
             "VQB_DIALOG_SCREEN": f"{width}x{height}",
         }
         child = subprocess.run(
             [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", __file__, "-k", "fits_is"],
-            capture_output=True, text=True, timeout=600, env=env, cwd=Path(__file__).resolve().parent.parent,
+            capture_output=True, text=True, timeout=600, env=env, cwd=tmp_path,
         )  # fmt: skip
         assert child.returncode == 0, child.stdout[-5000:] + child.stderr[-2000:]
         assert f"{len(DIALOGS)} passed" in child.stdout, child.stdout[-2000:]
