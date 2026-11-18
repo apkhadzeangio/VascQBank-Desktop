@@ -51,6 +51,9 @@ log = logging.getLogger(__name__)
 SETTINGS_VERSION = 1
 MAX_GEOMETRY_CHARS = 16_384  # base64 of a Qt geometry blob is well under 1 KB
 _REPLACE_RETRIES = 3
+# Phase 9b: a real settings file is well under 10 KB. A larger one is not ours (or damaged): it is set
+# aside like a corrupt one instead of being parsed — and its unknown keys rewritten — on every save.
+MAX_SETTINGS_BYTES = 1 << 20
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +177,9 @@ class SettingsStore:
         """Current settings; never raises."""
         with self._lock:
             try:
+                if self._path.stat().st_size > MAX_SETTINGS_BYTES:
+                    self._quarantine("implausibly large")
+                    return AppSettings()
                 raw = self._path.read_bytes()
             except FileNotFoundError:
                 return AppSettings()
