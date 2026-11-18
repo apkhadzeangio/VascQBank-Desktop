@@ -169,6 +169,22 @@ def test_after_the_draft_is_discarded_the_question_can_be_approved(env: Env) -> 
     assert env.approve().changed
 
 
+def test_approving_an_approved_question_again_does_not_hide_a_later_draft(env: Env) -> None:
+    """Phase 9b (D18, found by the model-based test): a draft written after the approval (e.g. in an
+    earlier session) must not be answered with "already approved" — the reviewer could believe the
+    new text was approved while the export keeps the old one."""
+    env.approve()
+    d = env.detail()
+    later = QuestionContent("დამტკიცების შემდეგ დაწერილი ტექსტი", d.content.options, d.content.correct, "e")
+    env.drafts.save_draft(d.id, d.revision_id, d.lock_version, later, REVIEWER)
+    before = snapshot(env.paths)
+    with pytest.raises(UnresolvedDraft):
+        env.approve()
+    assert snapshot(env.paths) == before and draft_row(env.paths, UID) is not None
+    env.drafts.discard_draft(d.id, REVIEWER)
+    assert env.approve().changed is False  # without the draft: the ordinary "already approved"
+
+
 def test_saving_the_draft_first_makes_the_approval_apply_to_the_new_text(env: Env) -> None:
     d = env.detail()
     other = QuestionContent("შენახული და დამტკიცებული", d.content.options, d.content.correct, "e")

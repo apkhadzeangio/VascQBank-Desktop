@@ -118,6 +118,13 @@ def apply_action(
                 status_before,
             )
 
+        if action is ReviewAction.APPROVE and is_repeat(status_before, action):
+            # Phase 9b: "already approved" must not hide a different draft written later (e.g. an
+            # earlier session): the reviewer could believe the new text was approved. Same rule as
+            # for a first approval: refused, nothing written, the draft is opened instead.
+            pending = pending_draft(conn, question_id, row_content(row))
+            if pending is not None:
+                raise DraftPending(question_id, pending[0], pending[1])
         if is_repeat(status_before, action) and (
             action is not ReviewAction.APPROVE or approved_revision_id == current_revision_id
         ):
