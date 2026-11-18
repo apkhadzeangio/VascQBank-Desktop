@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+import pytest
 
 from vascqbank_desktop.config.constants import DATA_DIR_ENV_VAR, DATABASE_FILENAME
 from vascqbank_desktop.config.paths import AppPaths, default_data_dir, resolve_app_paths
@@ -19,6 +22,7 @@ def test_windows_falls_back_to_home_when_env_missing() -> None:
     assert result == HOME / "AppData" / "Local" / "VascQBank-Desktop"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="'/data/xdg' is not an absolute path under Windows path rules")
 def test_linux_respects_absolute_xdg_data_home() -> None:
     result = default_data_dir(platform="linux", environ={"XDG_DATA_HOME": "/data/xdg"}, home=HOME)
     assert result == Path("/data/xdg/vascqbank-desktop")

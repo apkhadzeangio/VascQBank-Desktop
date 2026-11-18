@@ -51,6 +51,7 @@ def test_format_percent_and_size() -> None:
     assert format_size(35_168_256) == "33.5 MB"
 
 
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="time.tzset() is POSIX-only (absent on Windows)")
 def test_timestamps_are_shown_in_the_local_time_zone(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TZ", "Asia/Tbilisi")  # UTC+4, no daylight saving
     time.tzset()

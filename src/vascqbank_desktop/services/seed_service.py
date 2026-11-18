@@ -447,7 +447,8 @@ def install_seed(paths: AppPaths, seed: VerifiedSeed) -> SeedInstallResult:
                 raise SeedInvalid(SeedProblem.INTEGRITY, "the installed copy fails quick_check")
         finally:
             conn.close()
-        with temp.open("rb") as handle:
+        # "rb+", not "rb": on Windows fsync (FlushFileBuffers) needs a handle opened for writing.
+        with temp.open("rb+") as handle:
             os.fsync(handle.fileno())
         _checkpoint("before-publish")
         _publish_no_overwrite(temp, final)

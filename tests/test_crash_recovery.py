@@ -8,6 +8,7 @@ checks that it holds exactly the last *committed* state — never a half-written
 
 from __future__ import annotations
 
+import os
 import signal
 import sqlite3
 import subprocess
@@ -42,6 +43,8 @@ PRELUDE = textwrap.dedent(
     from vascqbank_desktop.services.edit_service import EditService
     from vascqbank_desktop.services.settings_service import ReviewerProfile, SettingsStore
 
+    # SIGKILL on POSIX; on Windows os.kill(pid, SIGTERM) is TerminateProcess — no cleanup either.
+    KILL = signal.SIGTERM if os.name == "nt" else signal.SIGKILL
     paths = AppPaths(data_dir=Path(sys.argv[1]))
     kill_at = sys.argv[2] if len(sys.argv) > 2 else ""
     real_open = connection.open_database
@@ -51,7 +54,7 @@ PRELUDE = textwrap.dedent(
         if kill_at:
             def trace(statement):
                 if kill_at in statement:
-                    os.kill(os.getpid(), signal.SIGKILL)
+                    os.kill(os.getpid(), KILL)
             conn.set_trace_callback(trace)
         return conn
 
@@ -73,7 +76,8 @@ def run_child(script: str, paths: AppPaths, kill_at: str = "") -> subprocess.Com
 
 
 def killed(result: subprocess.CompletedProcess[str]) -> bool:
-    return result.returncode == -signal.SIGKILL
+    # POSIX: terminated by SIGKILL; Windows: TerminateProcess with exit code 15 (SIGTERM's number).
+    return result.returncode == (signal.SIGTERM if os.name == "nt" else -signal.SIGKILL)
 
 
 @pytest.fixture
@@ -100,7 +104,7 @@ def test_a_confirmed_draft_survives_the_process_being_killed(bank: AppPaths) -> 
             QuestionContent({GEORGIAN!r}, detail.content.options, AnswerLetter.D, "განმარტება"),
             "დავით ფარღალავა")
         print("CONFIRMED", flush=True)          # printed only AFTER save_draft returned (= committed)
-        os.kill(os.getpid(), signal.SIGKILL)    # abrupt end: no cleanup, no flush, no close
+        os.kill(os.getpid(), KILL)              # abrupt end: no cleanup, no flush, no close
         """,
         bank,
     )
