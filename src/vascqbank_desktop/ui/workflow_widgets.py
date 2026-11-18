@@ -8,6 +8,7 @@ connects them.
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
+from PySide6.QtGui import QShortcut
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -22,6 +23,7 @@ from vascqbank_desktop.domain.editing import MAX_NOTE_LENGTH
 from vascqbank_desktop.domain.review_status import ReviewStatus
 from vascqbank_desktop.domain.workflow import ReviewAction, allowed_actions
 from vascqbank_desktop.ui import strings
+from vascqbank_desktop.ui.keys import key
 from vascqbank_desktop.ui.widgets import make_label
 
 
@@ -127,6 +129,9 @@ class ReasonDialog(QDialog):
         self.edit.setMinimumHeight(90)
         self.edit.setAccessibleName(title)
         self.edit.textChanged.connect(self._clear_error)
+        # Phase 9b: keyboard only — Tab moves on to the buttons (a tab character would be collapsed
+        # into a space anyway) and Ctrl+Enter confirms from inside the text
+        self.edit.setTabChangesFocus(True)
         column.addWidget(self.edit)
         self.error_label = make_label("", "ErrorNotice")
         self.error_label.hide()
@@ -143,6 +148,8 @@ class ReasonDialog(QDialog):
         row.addWidget(self.cancel_button)
         row.addWidget(self.confirm_button)
         column.addLayout(row)
+        for sequence in ("Ctrl+Return", "Ctrl+Enter"):
+            QShortcut(key(sequence), self, activated=self._confirm)
 
     def text(self) -> str:
         """The reason as one line (line breaks become spaces), trimmed."""

@@ -222,6 +222,17 @@ def install_signal_shutdown(app, window) -> dict[int, object]:  # noqa: ANN001
     return previous
 
 
+def _stack_buttons(box) -> None:  # noqa: ANN001 - a QMessageBox
+    """Phase 9b: one button per row. QMessageBox caps its width (800 px on a 1280-px screen), so four
+    long Georgian choices side by side were cut off — at the very moment they must be understood."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QDialogButtonBox
+
+    buttons = box.findChild(QDialogButtonBox)
+    if buttons is not None:
+        buttons.setOrientation(Qt.Orientation.Vertical)
+
+
 def ask_recovery(evidence: Sequence[Evidence], data_dir: Path, exit_after_ms: int = 0) -> str:
     """The Georgian recovery dialog: ``"restore"``, ``"open"``, ``"new"`` (confirmed twice) or ``"exit"``."""
     from PySide6.QtCore import QTimer, QUrl
@@ -241,6 +252,7 @@ def ask_recovery(evidence: Sequence[Evidence], data_dir: Path, exit_after_ms: in
     new_button = box.addButton(strings.RECOVERY_NEW, QMessageBox.ButtonRole.DestructiveRole)
     exit_button = box.addButton(strings.RECOVERY_EXIT, QMessageBox.ButtonRole.RejectRole)
     box.setDefaultButton(exit_button)
+    _stack_buttons(box)
     if exit_after_ms:
         QTimer.singleShot(exit_after_ms, box.reject)
     box.exec()
@@ -297,6 +309,7 @@ def ask_damaged(result: StartupResult, data_dir: Path, exit_after_ms: int = 0) -
     open_button = box.addButton(strings.RECOVERY_OPEN_FOLDER, QMessageBox.ButtonRole.HelpRole)
     exit_button = box.addButton(strings.RECOVERY_EXIT, QMessageBox.ButtonRole.RejectRole)
     box.setDefaultButton(exit_button)
+    _stack_buttons(box)
     if exit_after_ms:
         QTimer.singleShot(exit_after_ms, box.reject)
     box.exec()
