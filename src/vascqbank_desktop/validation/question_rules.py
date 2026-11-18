@@ -10,6 +10,8 @@ import re
 from collections.abc import Iterable, Sequence
 
 from vascqbank_desktop.domain.answers import ANSWER_LETTERS
+from vascqbank_desktop.domain.editing import MAX_FIELD_LENGTH, EditField, ProblemKind, validate_content
+from vascqbank_desktop.domain.question import QuestionContent
 from vascqbank_desktop.validation.issues import IssueCode, ValidationIssue, make_issue
 
 _MARKDOWN = re.compile(r"(\*\*|__|`|^#{1,6}\s|^\s*[-+]\s{1,3}\S)", re.M)
@@ -118,3 +120,49 @@ def _compress_ranges(numbers: list[int], limit: int = 12) -> str:
     if len(ranges) > limit:
         return ", ".join(ranges[:limit]) + f" … (სულ {len(numbers)})"
     return ", ".join(ranges)
+
+
+_FIELD_NAMES = {
+    EditField.STEM: "კითხვის ტექსტი",
+    EditField.EXPLANATION: "განმარტება",
+}
+
+
+def _field_name(field: EditField | None) -> str:
+    if field is None:
+        return ""
+    return _FIELD_NAMES.get(field) or f"პასუხი {field.option_letter})"
+
+
+def field_content_errors(
+    *, qid: str, file: str | None, line: int | None, content: QuestionContent
+) -> list[ValidationIssue]:
+    """Phase 9b: the editor's and the approval's own field rules, applied at import.
+
+    Before, a question with a NUL (or another control character) or a field longer than
+    :data:`MAX_FIELD_LENGTH` was imported as *valid* although it could never be saved or approved.
+    Empty fields are reported by the parsers themselves and are not repeated here.
+    """
+    issues: list[ValidationIssue] = []
+    fields = {
+        EditField.STEM: content.stem,
+        EditField.EXPLANATION: content.explanation,
+        **dict(zip((f for f in EditField if f.option_letter), content.options, strict=False)),
+    }
+    for problem in validate_content(content):
+        if problem.kind is ProblemKind.TOO_LONG:
+            text = fields.get(problem.field, "") if problem.field else ""
+            issues.append(
+                make_issue(
+                    IssueCode.FIELD_TOO_LONG, file=file, line=line, qid=qid,
+                    field=_field_name(problem.field), length=len(text), limit=MAX_FIELD_LENGTH,
+                )
+            )  # fmt: skip
+        elif problem.kind is ProblemKind.CONTROL_CHARACTERS:
+            issues.append(
+                make_issue(
+                    IssueCode.FIELD_CONTROL_CHARACTERS, file=file, line=line, qid=qid,
+                    field=_field_name(problem.field),
+                )
+            )  # fmt: skip
+    return issues

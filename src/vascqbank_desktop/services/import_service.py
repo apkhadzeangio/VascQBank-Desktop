@@ -30,7 +30,7 @@ from vascqbank_desktop.domain.question import ImportedQuestion, SourceKind
 from vascqbank_desktop.importexport.common import ParsedItem, SourceFile
 from vascqbank_desktop.importexport.discovery import Discovery, discover
 from vascqbank_desktop.validation.issues import IssueCode, Severity, ValidationIssue, make_issue
-from vascqbank_desktop.validation.question_rules import normalized_key
+from vascqbank_desktop.validation.question_rules import field_content_errors, normalized_key
 
 log = logging.getLogger(__name__)
 
@@ -154,6 +154,14 @@ def dry_run(paths: AppPaths, selected: Sequence[Path]) -> DryRunReport:
     for source in discovery.sources:
         result = source.parse()
         general.extend(result.issues)
+        for item in result.items:  # Phase 9b: never "valid" what the editor and approval would refuse
+            if item.is_valid and item.question is not None:
+                item.issues.extend(
+                    field_content_errors(
+                        qid=str(item.qid), file=item.question.source.file,
+                        line=item.question.source.line, content=item.question.content,
+                    )
+                )  # fmt: skip
         items.extend(result.items)
         sources.append(
             SourceSummary(

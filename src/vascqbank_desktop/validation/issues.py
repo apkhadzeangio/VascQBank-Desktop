@@ -58,6 +58,9 @@ class IssueCode(StrEnum):
     MASTER_NOT_REFINED = "MASTER_NOT_REFINED"
     MASTER_ANSWER_MISMATCH = "MASTER_ANSWER_MISMATCH"
     MASTER_NO_RECORDS = "MASTER_NO_RECORDS"
+    # --- field content (Phase 9b: the same limits the editor and the approval apply) -----------
+    FIELD_CONTROL_CHARACTERS = "FIELD_CONTROL_CHARACTERS"
+    FIELD_TOO_LONG = "FIELD_TOO_LONG"
     # --- warnings -----------------------------------------------------------
     EXPLANATION_SENTENCES = "EXPLANATION_SENTENCES"
     DUPLICATE_STEM = "DUPLICATE_STEM"
@@ -112,6 +115,8 @@ _CATALOG: dict[IssueCode, tuple[Severity, str]] = {
     IssueCode.DUPLICATE_STEM: (W, "კითხვის ტექსტი ემთხვევა {other}-ს — შესაძლო დუბლიკატი."),
     IssueCode.DUPLICATE_OPTIONS: (W, "პასუხები {letters} ერთმანეთს ემთხვევა."),
     IssueCode.STRAY_ASTERISK: (W, "სტრიქონი {line}: ტექსტში ფიფქი (*) გვხვდება; შეამოწმეთ, ხომ არ არის შემთხვევითი."),
+    IssueCode.FIELD_CONTROL_CHARACTERS: (E, "ველი „{field}“ შეიცავს დაუშვებელ საკონტროლო სიმბოლოს (მაგ. NUL); ასეთ კითხვას ვერც შეინახავდით და ვერც დაამტკიცებდით. გაასწორეთ წყარო ფაილი."),
+    IssueCode.FIELD_TOO_LONG: (E, "ველი „{field}“ ძალიან გრძელია ({length} სიმბოლო; დასაშვებია არაუმეტეს {limit}). სავარაუდოდ ფაილში ორი ჩანაწერი შეერთდა ან ზედმეტი ტექსტი მოხვდა."),
     IssueCode.MARKDOWN_REMNANT: (W, "ტექსტი შეიცავს Markdown-ის ნიშნებს ({token})."),
     IssueCode.MISSING_BLANK_LINE: (W, "სტრიქონი {line}: კითხვებს შორის ცარიელი სტრიქონი აკლია."),
     IssueCode.CONFLICT_EXISTING: (W, "ID {qid} უკვე არსებობს ბაზაში და შემომავალი ტექსტი განსხვავდება ორიგინალისგან. არსებული ჩანაწერი და რეცენზენტის ცვლილებები უცვლელი დარჩება; ეს ვერსია არ დაიმპორტდება."),
