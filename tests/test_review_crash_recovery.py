@@ -1,4 +1,4 @@
-"""Approval, rejection, reopening and restore interrupted by SIGKILL.
+"""Approval, rejection, reopening and restore interrupted by SIGKILL (TerminateProcess on Windows).
 
 Isolated child processes work on TEMPORARY databases of synthetic questions and are killed at
 an exact SQL statement of the transaction (SQLite's trace hook). The parent then reopens the
@@ -8,7 +8,6 @@ the same action must work afterwards.
 
 from __future__ import annotations
 
-import signal
 import sqlite3
 import subprocess
 import sys
@@ -16,6 +15,7 @@ import textwrap
 
 import pytest
 from bank import approve, events_of, make_question, question_row, revisions_of, seed, snapshot
+from crash import CHILD_DIE, KILLED_RETURNCODE
 
 from vascqbank_desktop.config.paths import AppPaths
 from vascqbank_desktop.domain.review_status import ReviewStatus
@@ -24,12 +24,10 @@ from vascqbank_desktop.services.edit_service import EditService
 from vascqbank_desktop.services.review_service import ReviewService
 from vascqbank_desktop.services.settings_service import ReviewerProfile, SettingsStore
 
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the scenarios kill the child with SIGKILL")
-
 UID = "ALI-0003"
 REVIEWER = "დავით ფარღალავა"
 
-PRELUDE = textwrap.dedent(
+PRELUDE = CHILD_DIE + textwrap.dedent(
     """
     import os, signal, sys
     from pathlib import Path
@@ -49,7 +47,7 @@ PRELUDE = textwrap.dedent(
         if kill_at:
             def trace(statement):
                 if kill_at in statement:
-                    os.kill(os.getpid(), signal.SIGKILL)
+                    die()
             conn.set_trace_callback(trace)
         return conn
 
@@ -133,7 +131,7 @@ def test_a_kill_at_any_point_leaves_the_database_exactly_as_it_was(
     prepare(bank, action)
     before = snapshot(bank)
     result = run_child(bank, action, kill_at)
-    assert result.returncode == -signal.SIGKILL and "DONE" not in result.stdout, result.stderr
+    assert result.returncode == KILLED_RETURNCODE and "DONE" not in result.stdout, result.stderr
     assert integrity_ok(bank)
     assert snapshot(bank) == before  # status, pointers, lock version, revisions, events: all or nothing
 

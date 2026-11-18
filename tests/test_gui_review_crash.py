@@ -1,4 +1,4 @@
-"""The whole GUI killed (SIGKILL) in the middle of an approval or a restore.
+"""The whole GUI killed (SIGKILL; TerminateProcess on Windows) in the middle of an approval or a restore.
 
 A child copy of the program runs on a TEMPORARY database of synthetic questions and dies at an
 exact SQL statement of the decision's transaction. The next start must find the question
@@ -8,7 +8,6 @@ exactly as it was — no half approval — and the reviewer must be able to repe
 from __future__ import annotations
 
 import os
-import signal
 import sqlite3
 import subprocess
 import sys
@@ -19,6 +18,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from bank import events_of, question_row, revisions_of, seed_counts, snapshot  # noqa: E402
+from crash import CHILD_DIE, KILLED_RETURNCODE  # noqa: E402
 
 from vascqbank_desktop.config.paths import AppPaths  # noqa: E402
 from vascqbank_desktop.domain.subjects import SUBJECTS  # noqa: E402
@@ -27,14 +27,11 @@ from vascqbank_desktop.services.storage import initialize_storage  # noqa: E402
 from vascqbank_desktop.ui.main_window import MainWindow  # noqa: E402
 from vascqbank_desktop.ui.sidebar import PAGE_CATALOG  # noqa: E402
 
-pytestmark = [
-    pytest.mark.gui,
-    pytest.mark.skipif(sys.platform == "win32", reason="the scenarios kill the child with SIGKILL"),
-]
+pytestmark = pytest.mark.gui
 
 UID = "ALI-0003"
 
-CHILD = textwrap.dedent(
+CHILD = CHILD_DIE + textwrap.dedent(
     """
     import os, signal, sys
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -61,7 +58,7 @@ CHILD = textwrap.dedent(
 
         def trace(statement):
             if kill_at in statement:
-                os.kill(os.getpid(), signal.SIGKILL)  # die inside the decision's transaction
+                die()  # die inside the decision's transaction
 
         conn.set_trace_callback(trace)
         return conn
@@ -124,7 +121,7 @@ def test_a_killed_approve_and_next_leaves_the_question_pending_and_can_be_repeat
 ) -> None:
     before = snapshot(bank)
     result = run_child(bank, "approve_and_next", kill_at)
-    assert result.returncode == -signal.SIGKILL and "SURVIVED" not in result.stdout, result.stderr
+    assert result.returncode == KILLED_RETURNCODE and "SURVIVED" not in result.stdout, result.stderr
     assert sound(bank) and snapshot(bank) == before  # no half approval, no event, no lock bump
 
     window = restart(qtbot, bank)
@@ -152,6 +149,6 @@ def test_a_killed_restore_leaves_no_new_revision(qtbot, bank: AppPaths, kill_at:
     )
     before = snapshot(bank)
     result = run_child(bank, "restore", kill_at)
-    assert result.returncode == -signal.SIGKILL and "SURVIVED" not in result.stdout, result.stderr
+    assert result.returncode == KILLED_RETURNCODE and "SURVIVED" not in result.stdout, result.stderr
     assert sound(bank) and snapshot(bank) == before
     assert [r["revision_no"] for r in revisions_of(bank, UID)] == [1, 2]

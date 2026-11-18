@@ -1,4 +1,5 @@
-"""Export publication killed (SIGKILL) at every step, and the reconciliation that repairs it.
+"""Export publication killed (SIGKILL; TerminateProcess on Windows) at every step, and the
+reconciliation that repairs it.
 
 A filesystem rename and a SQLite COMMIT are not jointly atomic; these tests prove the documented
 guarantee instead: after any interruption and the next reconciliation, a published, verified folder
@@ -9,13 +10,13 @@ is recorded twice. Child processes work on temporary folders only.
 from __future__ import annotations
 
 import json
-import signal
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 import pytest
+from crash import CHILD_DIE, KILLED_RETURNCODE
 from exportbank import build
 
 from vascqbank_desktop.config.paths import AppPaths
@@ -25,9 +26,7 @@ from vascqbank_desktop.services import export_publication
 from vascqbank_desktop.services.export_publication import journal_dir, reconcile
 from vascqbank_desktop.services.export_service import ExportFormat, ExportRequest, ExportService
 
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="SIGKILL")
-
-CHILD = textwrap.dedent(
+CHILD = CHILD_DIE + textwrap.dedent(
     """
     import os, signal, sys
     from pathlib import Path
@@ -38,7 +37,7 @@ CHILD = textwrap.dedent(
     stage = sys.argv[3]
     def checkpoint(name):
         if name == stage:
-            os.kill(os.getpid(), signal.SIGKILL)
+            die()
     export_repository._checkpoint = checkpoint
     ExportService(AppPaths(data_dir=Path(sys.argv[1]))).run(ExportRequest(
         subjects=("ALI", "VENOUS"), formats=frozenset({ExportFormat.TXT, ExportFormat.DOCX}),
@@ -53,7 +52,7 @@ def kill_export_at(paths: AppPaths, dest: Path, stage: str) -> None:
         [sys.executable, "-c", CHILD, str(paths.data_dir), str(dest), stage],
         capture_output=True, text=True, timeout=120,
     )  # fmt: skip
-    assert child.returncode == -signal.SIGKILL and "SURVIVED" not in child.stdout, child.stderr
+    assert child.returncode == KILLED_RETURNCODE and "SURVIVED" not in child.stdout, child.stderr
 
 
 def runs(paths: AppPaths) -> list[dict]:
@@ -127,7 +126,7 @@ def test_a_crash_during_reconciliation_is_itself_recovered(bank: AppPaths, tmp_p
     child = subprocess.run(
         [
             sys.executable, "-c",
-            textwrap.dedent(
+            CHILD_DIE + textwrap.dedent(
                 """
                 import os, signal, sys
                 from pathlib import Path
@@ -136,7 +135,7 @@ def test_a_crash_during_reconciliation_is_itself_recovered(bank: AppPaths, tmp_p
                 from vascqbank_desktop.services.export_publication import reconcile
                 def checkpoint(name):
                     if name == "reconcile-inserted":
-                        os.kill(os.getpid(), signal.SIGKILL)
+                        die()
                 export_repository._checkpoint = checkpoint
                 reconcile(AppPaths(data_dir=Path(sys.argv[1])))
                 """
@@ -145,7 +144,7 @@ def test_a_crash_during_reconciliation_is_itself_recovered(bank: AppPaths, tmp_p
         ],
         capture_output=True, text=True, timeout=60,
     )  # fmt: skip
-    assert child.returncode == -signal.SIGKILL
+    assert child.returncode == KILLED_RETURNCODE
     assert runs(bank) == [] and journals(bank)  # the insert was rolled back, the intent kept
     assert len(reconcile(bank).recorded) == 1 and len(runs(bank)) == 2
 

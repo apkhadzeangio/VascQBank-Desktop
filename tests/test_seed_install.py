@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 import shutil
-import signal
 import sqlite3
 import subprocess
 import sys
@@ -14,6 +13,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from crash import CHILD_DIE, KILLED_RETURNCODE
 from seedbank import reseal_database, rewrite_manifest, small_seed, writable
 
 from vascqbank_desktop.config.paths import AppPaths
@@ -37,8 +37,6 @@ from vascqbank_desktop.services.seed_service import (
 from vascqbank_desktop.services.settings_service import ReviewerProfile, SettingsStore
 from vascqbank_desktop.services.startup import EvidenceKind, Outcome, prepare_storage
 from vascqbank_desktop.services.storage import initialize_storage
-
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions and SIGKILL")
 
 
 @pytest.fixture(scope="module")
@@ -309,9 +307,9 @@ def test_an_explicit_decision_creates_a_new_database_and_keeps_the_backups(
     assert {p: sha256_file(p) for p in app_paths.backups_dir.iterdir() if p in backups} == backups
 
 
-# ------------------------------------------------------------------ interrupted installation (SIGKILL)
+# ------------------------------------------------------------------ interrupted installation (abrupt kill)
 
-CHILD = textwrap.dedent(
+CHILD = CHILD_DIE + textwrap.dedent(
     """
     import os, signal, sys
     from pathlib import Path
@@ -322,7 +320,7 @@ CHILD = textwrap.dedent(
     stage = sys.argv[3]
     def checkpoint(name):
         if name == stage:
-            os.kill(os.getpid(), signal.SIGKILL)
+            die()
     seed_service._checkpoint = checkpoint
     prepare_storage(AppPaths(data_dir=Path(sys.argv[1])), Path(sys.argv[2]))
     print("SURVIVED", flush=True)
@@ -338,7 +336,7 @@ def test_power_loss_during_installation_is_recovered_on_the_next_start(
         [sys.executable, "-c", CHILD, str(app_paths.data_dir), str(seed_template), stage],
         capture_output=True, text=True, timeout=120,
     )  # fmt: skip
-    assert child.returncode == -signal.SIGKILL and "SURVIVED" not in child.stdout, child.stderr
+    assert child.returncode == KILLED_RETURNCODE and "SURVIVED" not in child.stdout, child.stderr
     published = app_paths.database_file.exists()
     assert published is (stage == "published")  # never a half-installed database under the real name
     result = prepare_storage(app_paths, seed_template)  # the next start

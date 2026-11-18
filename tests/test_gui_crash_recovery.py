@@ -1,4 +1,4 @@
-"""The whole program killed abruptly (SIGKILL) while a question is being edited.
+"""The whole program killed abruptly (SIGKILL; TerminateProcess on Windows) while a question is being edited.
 
 Each scenario starts a *child* copy of the GUI (offscreen) on a TEMPORARY database of synthetic
 questions, drives it to a precise state, kills only that child, and then starts the main window
@@ -9,7 +9,6 @@ process that holds real data: the child can only open the temporary data directo
 from __future__ import annotations
 
 import os
-import signal
 import sqlite3
 import subprocess
 import sys
@@ -20,6 +19,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from bank import draft_row, question_row, revisions_of, seed_counts  # noqa: E402
+from crash import CHILD_DIE, KILLED_RETURNCODE, kill  # noqa: E402
 
 from vascqbank_desktop.config.paths import AppPaths  # noqa: E402
 from vascqbank_desktop.domain.subjects import SUBJECTS  # noqa: E402
@@ -29,16 +29,13 @@ from vascqbank_desktop.ui import strings  # noqa: E402
 from vascqbank_desktop.ui.main_window import MainWindow  # noqa: E402
 from vascqbank_desktop.ui.sidebar import PAGE_CATALOG  # noqa: E402
 
-pytestmark = [
-    pytest.mark.gui,
-    pytest.mark.skipif(sys.platform == "win32", reason="the scenarios kill the child with SIGKILL"),
-]
+pytestmark = pytest.mark.gui
 
 UID = "ALI-0003"
 FIRST = "პირველი მონახაზი — დადასტურებულად ჩაწერილი"
 SECOND = "მეორე მონახაზი — ვერ მოასწრო ჩაწერა"
 
-CHILD = textwrap.dedent(
+CHILD = CHILD_DIE + textwrap.dedent(
     """
     import os, signal, sys, time
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -88,7 +85,7 @@ CHILD = textwrap.dedent(
 
             def trace(statement):
                 if "drafts" in statement and not statement.lstrip().upper().startswith("SELECT"):
-                    os.kill(os.getpid(), signal.SIGKILL)  # die inside the draft transaction
+                    die()  # die inside the draft transaction
 
             conn.set_trace_callback(trace)
             return conn
@@ -124,10 +121,10 @@ def wait_ready_and_kill(child: subprocess.Popen[str]) -> None:
         assert child.stdout is not None
         line = child.stdout.readline().strip()
         assert line == "READY", (line, child.stderr.read() if child.stderr else "")
-        child.send_signal(signal.SIGKILL)
+        kill(child.pid)
     finally:
         child.wait(timeout=30)
-    assert child.returncode == -signal.SIGKILL
+    assert child.returncode == KILLED_RETURNCODE
 
 
 def database_is_sound(paths: AppPaths) -> None:
@@ -186,7 +183,7 @@ def test_killed_in_the_middle_of_a_draft_write_leaves_the_previous_draft_intact(
 ) -> None:
     child = run_child(bank, "kill_inside_write")
     child.wait(timeout=60)
-    assert child.returncode == -signal.SIGKILL, child.stderr.read() if child.stderr else ""
+    assert child.returncode == KILLED_RETURNCODE, child.stderr.read() if child.stderr else ""
     database_is_sound(bank)
     row = draft_row(bank, UID)
     assert row is not None and row["stem"] == FIRST  # the half-finished write left no trace

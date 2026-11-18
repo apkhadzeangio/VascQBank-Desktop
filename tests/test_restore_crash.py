@@ -1,11 +1,11 @@
-"""A restore killed (SIGKILL) at every stage, and the start-up recovery that resolves it.
+"""A restore killed (SIGKILL; TerminateProcess on Windows) at every stage, and the start-up
+recovery that resolves it.
 
 Every child process works on a throw-away synthetic database in a temporary folder.
 """
 
 from __future__ import annotations
 
-import signal
 import subprocess
 import sys
 import textwrap
@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from bank import approve, seed_counts, simulate_edit
+from crash import CHILD_DIE, KILLED_RETURNCODE
 from test_restore_service import questions
 
 from vascqbank_desktop.config.paths import AppPaths
@@ -26,9 +27,7 @@ from vascqbank_desktop.services.restore_service import (
 from vascqbank_desktop.services.seed_service import sha256_file
 from vascqbank_desktop.services.startup import Outcome, prepare_storage
 
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="SIGKILL")
-
-CHILD = textwrap.dedent(
+CHILD = CHILD_DIE + textwrap.dedent(
     """
     import os, signal, sys
     from pathlib import Path
@@ -38,7 +37,7 @@ CHILD = textwrap.dedent(
     stage = sys.argv[3]
     def checkpoint(name):
         if name == stage:
-            os.kill(os.getpid(), signal.SIGKILL)
+            die()
     restore_service._checkpoint = checkpoint
     paths = AppPaths(data_dir=Path(sys.argv[1]))
     backup = Path(sys.argv[2])
@@ -56,7 +55,7 @@ def kill_at(paths: AppPaths, backup: Path, stage: str, action: str = "restore") 
         [sys.executable, "-c", CHILD, str(paths.data_dir), str(backup), stage, action],
         capture_output=True, text=True, timeout=120,
     )  # fmt: skip
-    assert child.returncode == -signal.SIGKILL and "SURVIVED" not in child.stdout, child.stderr
+    assert child.returncode == KILLED_RETURNCODE and "SURVIVED" not in child.stdout, child.stderr
 
 
 @pytest.fixture
