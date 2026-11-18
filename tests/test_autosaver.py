@@ -89,7 +89,9 @@ def collect(autosaver: DraftAutosaver) -> tuple[list[DraftWrite], list[BaseExcep
 
 
 def test_a_burst_of_edits_is_one_write_of_the_newest_text(qtbot, fake) -> None:
-    autosaver = make(qtbot, fake, delay_ms=150)
+    # 1 s idle delay: far longer than any gap between the simulated keystrokes, even on a loaded
+    # CI runner where a 10 ms wait can overrun by 100+ ms (seen on Windows with 150 ms).
+    autosaver = make(qtbot, fake, delay_ms=1000)
     saved, _failed = collect(autosaver)
     session = autosaver.begin_session()
     for seq in range(1, 8):
