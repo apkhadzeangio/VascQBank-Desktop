@@ -35,8 +35,9 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
-from vascqbank_desktop.config.paths import AppPaths
+from vascqbank_desktop.config.paths import AppPaths, data_dir_too_long
 from vascqbank_desktop.db.backup import list_backups
+from vascqbank_desktop.db.errors import DataDirTooLong
 from vascqbank_desktop.services.restore_service import (
     RecoveryOutcome,
     RestoreRecovery,
@@ -154,6 +155,8 @@ def prepare_storage(
     allow_new_database: bool = False,
     accept_damaged: bool = False,
 ) -> StartupResult:
+    if data_dir_too_long(paths):  # Phase 9b (D21): refused before anything is created
+        raise DataDirTooLong(str(paths.data_dir))
     paths.ensure_directories()
     # An interrupted restore is resolved first, before anything opens or creates a database.
     recovery = recover_interrupted_restore(paths)

@@ -68,6 +68,14 @@ class AppPaths:
     def logs_dir(self) -> Path:
         return self.data_dir / "logs"
 
+    def longest_internal_path(self) -> Path:
+        """The longest path SQLite itself will ever be asked to open inside this data folder.
+
+        A backup being written (``…-pre-migration-vNN.sqlite3.partial`` and the ``-journal`` SQLite
+        adds while it writes) is the longest; restore temporaries and the WAL files are shorter.
+        """
+        return self.backups_dir / _LONGEST_SQLITE_NAME
+
     def ensure_directories(self) -> None:
         """Create all directories (idempotent)."""
         for directory in (
@@ -78,6 +86,23 @@ class AppPaths:
             self.logs_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
+
+
+# Phase 9b (D21). SQLite refuses longer paths than its VFS allows: 512 bytes on POSIX (the unix VFS'
+# MAX_PATHNAME; a Georgian letter is 3 bytes in UTF-8) and MAX_PATH = 260 UTF-16 units on Windows,
+# whatever Python itself supports. Near that limit the database still opened but every backup
+# failed, so a data folder whose longest internal path would not fit is refused at start-up.
+_LONGEST_SQLITE_NAME = "vascqbank-20000101-000000-000000-pre-migration-v99.sqlite3.partial-journal"
+MAX_SQLITE_PATH_BYTES = 500  # POSIX, UTF-8 bytes (SQLite: < 512, with a margin)
+MAX_SQLITE_PATH_CHARS = 255  # Windows, UTF-16 code units (SQLite: < 260)
+
+
+def data_dir_too_long(paths: AppPaths, *, windows: bool | None = None) -> bool:
+    """Whether SQLite could not open every file the program creates in this data folder."""
+    longest = str(paths.longest_internal_path().resolve())  # SQLite resolves symbolic links too
+    if (sys.platform == "win32") if windows is None else windows:
+        return len(longest.encode("utf-16-le")) // 2 > MAX_SQLITE_PATH_CHARS
+    return len(os.fsencode(longest)) > MAX_SQLITE_PATH_BYTES
 
 
 def default_data_dir(

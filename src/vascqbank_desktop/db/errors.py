@@ -25,3 +25,7 @@ class SchemaTooNewError(DatabaseError):
 
 class MigrationError(DatabaseError):
     """A migration failed; the database was rolled back to its previous version."""
+
+
+class DataDirTooLong(DatabaseError):
+    """Phase 9b (D21): SQLite could not open every file the program creates in this data folder."""

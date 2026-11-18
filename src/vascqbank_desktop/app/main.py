@@ -29,7 +29,7 @@ from vascqbank_desktop.config.constants import (
     WINDOWS_APP_USER_MODEL_ID,
 )
 from vascqbank_desktop.config.paths import AppPaths, resolve_app_paths
-from vascqbank_desktop.db.errors import DatabaseError
+from vascqbank_desktop.db.errors import DatabaseError, DataDirTooLong
 from vascqbank_desktop.services.seed_service import locate_seed
 from vascqbank_desktop.services.startup import Evidence, Outcome, StartupResult, prepare_storage
 from vascqbank_desktop.services.storage import StorageStatus
@@ -532,7 +532,9 @@ def run_gui(
         assert status is not None
     except STORAGE_ERRORS as exc:
         log.exception("Storage initialisation failed")
-        box = QMessageBox(QMessageBox.Icon.Critical, strings.STARTUP_ERROR_TITLE, strings.STARTUP_ERROR_TEXT)
+        too_long = isinstance(exc, DataDirTooLong)
+        text = strings.STARTUP_PATH_TOO_LONG if too_long else strings.STARTUP_ERROR_TEXT
+        box = QMessageBox(QMessageBox.Icon.Critical, strings.STARTUP_ERROR_TITLE, text)
         box.setDetailedText(f"{type(exc).__name__}: {exc}\n\n{paths.database_file}")
         if exit_after_ms:
             QTimer.singleShot(exit_after_ms, box.reject)
