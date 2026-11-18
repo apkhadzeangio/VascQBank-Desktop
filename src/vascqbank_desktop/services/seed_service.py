@@ -42,6 +42,7 @@ log = logging.getLogger(__name__)
 
 MANIFEST_FORMAT = 1
 MANIFEST_NAME = "seed-manifest.json"
+MAX_MANIFEST_BYTES = 4 << 20  # a real seed manifest is a few KB
 DATABASE_NAME = "vascqbank-seed.sqlite3"
 SEED_DIR_ENV = "VASCQBANK_SEED_DIR"
 INSTALL_PREFIX = ".seed-install-"
@@ -166,9 +167,13 @@ def production_gate_failures(subjects: dict[str, int]) -> list[str]:
 # ----------------------------------------------------------------------------------- manifest
 def parse_manifest(data: bytes) -> SeedManifest:
     """Parse and type-check ``seed-manifest.json`` (format 1); raises :class:`SeedInvalid`."""
+    if len(data) > MAX_MANIFEST_BYTES:
+        raise SeedInvalid(SeedProblem.MANIFEST_INVALID, "the manifest is implausibly large")
     try:
         raw = json.loads(data.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    # Phase 9 (fuzzing): an over-long integer raises a plain ValueError (not JSONDecodeError), deep
+    # nesting a RecursionError — both must be a controlled "invalid manifest", never a crash.
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         raise SeedInvalid(SeedProblem.MANIFEST_INVALID, f"not valid UTF-8 JSON: {exc}") from exc
     if not isinstance(raw, dict) or raw.get("manifest_format") != MANIFEST_FORMAT:
         raise SeedInvalid(SeedProblem.MANIFEST_INVALID, f"manifest_format must be {MANIFEST_FORMAT}")
@@ -189,7 +194,8 @@ def parse_manifest(data: bytes) -> SeedManifest:
             database_size=int(database["size"]),
             raw=raw,
         )
-    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+    # OverflowError: int(float("inf")) from a JSON number such as 1e999 (found by fuzzing, Phase 9)
+    except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as exc:
         raise SeedInvalid(SeedProblem.MANIFEST_INVALID, f"missing or malformed field: {exc}") from exc
     if not manifest.seed_version.strip() or len(manifest.database_sha256) != 64:
         raise SeedInvalid(SeedProblem.MANIFEST_INVALID, "seed_version or database sha256 malformed")

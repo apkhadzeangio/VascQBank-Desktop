@@ -71,7 +71,10 @@ enforces it, and caught exactly such a slip while Phase 3 was written.
 3. Configure logging: rotating UTF-8 log in `<data>/logs`; console handler only
    if a console exists (windowed Windows builds have `sys.stderr is None`).
 4. `--self-check` stops here after storage initialisation and prints a report;
-   Qt is never imported, so it runs on machines without a display.
+   no window and no GUI module are created, so it runs on machines without a display. Since
+   Phase 9 it first takes the same per-data-folder instance lock as the GUI (`QtCore.QLockFile`
+   only) and exits with code 6 if the program is already running on that folder, so its
+   restore/seed recovery can never race a running instance.
 5. GUI: set Windows AppUserModelID / Linux desktop-file name, create
    `QApplication`, register bundled fonts, apply theme, initialise storage
    (error dialog and exit code 2 on failure — nothing is modified), show window.
@@ -482,8 +485,8 @@ pruned), and the backup list with creation time, type, size and a re-verificatio
 
 **Restore is implemented in Phase 8 (§28)**: verify the chosen backup → verified safety backup of
 the current database → close connections → atomic replace through a journal → stale
-`-wal`/`-shm` set aside → reopen and migrate. Still design: "save backup as…" and a start-up
-backup if the last one is older than 24 h.
+`-wal`/`-shm` set aside → reopen and migrate. **Phase 9** added "save a copy elsewhere…" /
+"add an external backup…" (§36) and the daily automatic backup at start-up (§37).
 
 ## 11. Word and TXT export (implemented — Phase 6, details in §22)
 
@@ -1289,7 +1292,7 @@ including edits whose checksum was re-sealed so that only the content checks can
 3. **No database but traces of one** — a backup (`backups/vascqbank-*.sqlite3`), a `-wal`/`-shm`/`-journal`
    file of the database, the derived search index, a `VascQBank_Export_*` folder in the default export
    folder, or `settings.json` → **nothing is created** and the dialog *სამუშაო ბაზა ვერ მოიძებნა* explains
-   what was found and how to restore by hand (in-app restore does not exist yet). Choices: open the data
+   what was found (Phase 8 added an in-app restore from this dialog, §28). Choices: open the data
    folder and exit (default: exit), or — after a second confirmation — create a new database; backups and
    exports are never touched. `--self-check` exits with code 3.
 4. **No database, a seed** → `verify_seed`, then `install_seed`: stream-copy to
@@ -1375,6 +1378,7 @@ without its record. SIGKILL tests cover `journal-written`, `inserted`, `renamed`
 * The production gates are tested with the complete **synthetic** bank only; the real 10,000 questions do
   not exist yet, and their source files may reveal validation findings that need editorial decisions.
 * Backups cannot be restored from inside the application; the recovery dialog explains the manual copy.
+  *(Resolved in Phase 8, §28.)*
 * A seed's integrity is checked against its own manifest; the manifest is not cryptographically signed.
   Someone able to replace both files inside an installed application could ship a different (but
   structurally valid) bank. Signing belongs to the packaging phase if required.
@@ -1631,3 +1635,272 @@ print). Budgets in the tests are several times these values.
   → export again; compare outputs.
 * Review all exit codes and Georgian messages with a native speaker; screen-reader check (NVDA/Orca).
 * Decide "save backup as…" (copy to another device) and a start-up backup when the last is old.
+
+*Phase 9 status of this list: see §34–§43.*
+
+---
+
+## 34. Phase 9 audit — scope and method
+
+Phase 9 is a reliability and release-readiness phase, not a feature phase. Baseline: `5163d2a`
+(version 0.8.0, 1,067 passing tests). Every critical subsystem was read end to end and exercised by
+tests; defects were fixed narrowly, without rewriting stable components and **without a schema
+migration** (schema v3 stays current; existing working databases need no conversion).
+
+| Subsystem | Result of the audit |
+|---|---|
+| Start-up and storage initialisation | sound; self-check now takes the instance lock (§35 D7) |
+| SQLite migrations | sound (forward-only, versioned, pre-migration backup); no change |
+| Manual import | commit now `synchronous=FULL` (§35 D8); interruption tests added (§38) |
+| Seed verification / first install | manifest parser hardened against hostile numbers/nesting (§35 D6) |
+| Catalog and search | sound; index rebuilt after restore (verified in §40) |
+| Editing and autosave | sound (draft isolation, FULL sync, optimistic lock); no change |
+| Approval / rejection / reopening | sound (approval bound to an exact revision, drafts refused) |
+| Revision history and restoration | sound (append-only, RESTORE revisions); no change |
+| DOCX/TXT export | sound; demanding-text audit added (§41) |
+| Export publication recovery | hardened against damaged/crafted journals and manifests (§35 D2–D3) |
+| Backup creation and verification | fsync + manifest-before-visibility; strict manifest check (§35 D4–D5) |
+| Backup restoration | journal path fields validated (§35 D1); restore matrix (§40) |
+| Application shutdown | sound; covered by GUI crash tests and the soak test's orderly close |
+| QThreadPool / QRunnable lifecycle | sound; soak test confirms the pool drains and threads do not grow |
+| Georgian localization | new strings Georgian; architecture test enforces it |
+| Session persistence | sound; restore-safe (missing question → safe fallback, §40) |
+| Settings and file permissions | sound; settings live outside the database and survive a restore |
+
+## 35. Defects found and fixed
+
+| # | Defect (before Phase 9) | Possible consequence | Fix | Tests |
+|---|---|---|---|---|
+| D1 | `restore-journal.json` path fields (`temp`, `safety_backup`, `displaced`, …) were used without validation | a damaged or crafted journal could make start-up recovery move or delete files outside the data folder | `journal_problems()` accepts only plain file names of the expected shape, known stages, SHA-256 hex, size limit; anything else → `AMBIGUOUS` (safe stop, nothing touched) | `test_phase9_security`, `test_fuzz_inputs` |
+| D2 | export-publication reconciliation trusted journal/manifest paths | `rmtree` of an arbitrary directory, reading files outside the export, crash on malformed JSON (`TypeError`/`RecursionError`) | `UntrustedJournal`; paths confined to the export folder (no absolute, `..`, symlinks); staging deleted only if its manifest hash matches the journal; unreadable/unverifiable journals set aside under `journal/unreadable` / `journal/unverified` | same |
+| D3 | `_discard` removed the journal even when the final export folder existed; stale-staging cleanup followed symlinks | loss of the evidence linking a published folder to its run; deletion through a symlink | journal kept if the final folder exists; symlinks skipped | same |
+| D4 | backups were not fsynced and the manifest was written non-atomically **after** the backup became visible | after a crash or power loss a backup without (or with a torn) manifest could be listed | one read snapshot → verify → hash → fsync → manifest written durably → atomic rename → folder fsync; partial files cleaned | `test_phase9_crash`, `test_phase9_security` |
+| D5 | `check_backup_file` accepted a manifest without `sha256`/`size`; pruning matched reasons by substring | an unverifiable file shown as verified; a future reason containing "import" could be pruned | `BackupProblem.MANIFEST_INVALID`; exact reason matching; symlinked backups not listed | `test_phase9_security` |
+| D6 | seed manifest parser crashed on `1e999`, 5,000-digit integers, deep nesting (found by fuzzing) | uncaught exception at first launch instead of "seed invalid" | size cap; `ValueError`/`RecursionError`/`OverflowError` → `SeedInvalid` | `test_fuzz_inputs` |
+| D7 | `--self-check` ran restore/seed recovery without the instance lock | recovery racing a running program on the same data folder | `QLockFile` taken first; exit code **6** if held | `test_phase9_security` |
+| D8 | import commit used WAL's default `synchronous=NORMAL` | a just-confirmed import could be lost on power failure (not on a program crash) | `make_durable` on the import connection | `test_phase9_crash` |
+| D9 | half-written backup files from interrupted backups accumulated | clutter; never shown, but never removed | `remove_stale_leftovers` (exact names only, older than 1 h) before the automatic backup | `test_backup_portability` |
+
+No defect was found that silently overwrote or discarded a confirmed edit, review decision or saved
+draft. No release-blocking data-loss defect remains open.
+
+### 35.1 SQLite integrity review (unchanged, verified)
+
+* Foreign keys `ON` on every connection; every FK child column indexed; `foreign_key_check` is run
+  after every destructive test scenario (crash, restore, acceptance, soak).
+* Immutability by trigger: `questions_identity_immutable` (uid, subject, number, batch, source kind,
+  file, line and fingerprint, `original_content_json`, `created_at`), `questions_no_delete`, append-only `question_revisions`,
+  `review_events`, `import_batches`, `export_runs`, `draft_discards`; contiguous revision numbers;
+  revision pointers must belong to the same question; drafts' base revision must belong to their question.
+* `CHECK ((status = 'APPROVED') = (approved_revision_id IS NOT NULL AND approved_at IS NOT NULL))`;
+  approval is refused while a different draft exists; export reads `approved_revision_id` only.
+* Optimistic `lock_version` on every write; `BEGIN IMMEDIATE` transactions; WAL; `synchronous=FULL`
+  for drafts, edits, review decisions, restore-revision, export publication, seed install and (now) import.
+
+## 36. Backup portability (implemented — Phase 9)
+
+`services/backup_portability.py`, buttons on the backup page.
+
+* **Save a copy elsewhere (`save_backup_copy`)**: the selected backup is first re-verified
+  (`check_backup_file`: manifest, size, SHA-256, `integrity_check`, row counts). Its bytes — never the
+  live WAL database — and its manifest are written to hidden temporary files in the chosen folder,
+  fsynced, read back and hashed, then published **without overwriting**: `os.link` (atomic,
+  fails if the name exists), or on file systems without hard links (FAT32/exFAT) an existence check +
+  rename. The copy is verified once more at the destination. Missing folder, existing file, read-only
+  folder, full disk and verification failure have distinct Georgian messages; on failure only the
+  files this call created are removed; the original backup is never modified.
+* **Add an external backup (`import_external_backup`)**: a backup chosen anywhere is inspected like a
+  restore candidate (`inspect_backup`: manifest, hash, application id, schema, foreign keys); an
+  identical file already in `backups/` is recognised (same SHA-256 and size) and not duplicated;
+  otherwise it is copied in as `vascqbank-<time>-imported.sqlite3` with a manifest recording
+  `original_reason`, the source *file name only* and the time. Imported backups are never pruned.
+  Restoring it then uses the normal confirmed restore (§28) — restore never reads from outside
+  `backups/` (its journal stores plain names only, §35 D1).
+* **Limitations.** Not tested on physical USB media, FAT32/exFAT or network drives. On file systems
+  without hard links the existence-check + rename has a tiny race window (another program creating
+  the same name in between). If the program is killed after the database copy is published but before
+  its manifest, the destination holds a copy without manifest; a retry refuses (`DESTINATION_EXISTS`,
+  never overwrites) and the reviewer must delete that file or choose another folder. Covered by
+  `test_phase9_crash`.
+
+## 37. Automatic start-up backup (implemented — Phase 9)
+
+`services/auto_backup.py`, started by the main window 3 s after it opens, on a worker thread (it blocks
+only a restore, not reviewing):
+
+1. leftovers of interrupted backups older than one hour are removed (exact names only);
+2. no database or no questions → nothing to protect;
+3. the newest backup of *this* database that passes full verification (at most the 5 newest are
+   checked) is younger than 24 h → nothing (any kind counts: manual, before import, before restore,
+   imported, automatic);
+4. its manifest's `change_signature` (row counts of every table, the sum of `lock_version` and the
+   newest `modified_at` of the questions, draft write counters/times/lengths, and the metadata) equals
+   the live database → nothing changed, nothing created — an idle
+   installation does not collect copies;
+5. otherwise **one** verified `…-automatic.sqlite3` backup; then only automatic backups beyond the 10
+   newest are pruned. Manual, pre-import, pre-migration, pre-restore and imported backups are never
+   pruned by this policy.
+
+Failures are logged and shown in the status bar, never raised. Timed smoke runs (`--exit-after-ms`)
+skip it. Backups made before Phase 9 have no `change_signature`; the policy then treats the database as
+changed (conservative).
+
+## 38. Crash and interruption matrix
+
+Process-kill tests: an isolated child process on a throw-away synthetic database is killed at a named
+point (`SIGKILL` on Linux; on Windows `os.kill(pid, SIGTERM)` = `TerminateProcess`). After each kill
+the next start-up is simulated; the tests assert `integrity_check`, `foreign_key_check`, the exact
+committed state, unchanged unrelated data, no duplicated audit events and idempotent recovery.
+
+| Operation | Kill points | Suite |
+|---|---|---|
+| draft autosave, revision save, discard | before/after commit | `test_crash_recovery`, `test_gui_crash_recovery` |
+| approve, reject, reopen, restore-revision | before/after commit | `test_review_crash_recovery`, `test_gui_review_crash` |
+| import commit | after the pre-import backup; mid-insert (SQLite progress ticks 1/5/25/120) | `test_phase9_crash` (new) |
+| seed installation | every stage | `test_seed_install` |
+| export publication | journal written, inserted, renamed, committed, journal removed, during reconciliation | `test_export_publication` |
+| manual and automatic backup | before manifest, after manifest, after rename | `test_phase9_crash` (new) |
+| save copy elsewhere / add external backup | before/after the first file, after the manifest | `test_phase9_crash` (new) |
+| backup restoration | every journal stage; crash during the recovery itself | `test_restore_crash` |
+| application shutdown | close with pending autosave / running work | GUI suites + soak test |
+
+Result: all pass on Linux (offscreen Qt). The POSIX-only suites skip on Windows; they have **not**
+been run on Windows. Process kills do not prove power-failure safety (the OS cache survives a process
+kill); no power-failure claim is made.
+
+## 39. Untrusted input and fuzzing
+
+`tests/test_fuzz_inputs.py` (Hypothesis, derandomized, 250 examples per property, no example
+database): question/explanation parsers and pairing on arbitrary text and bytes; TXT export → re-import
+exact round trip of arbitrary representable questions; question references; seed manifest; settings
+(`parse_settings`, `SettingsStore.load`); restore journal validation and reading; export journal parsing
+and published-folder verification; backup file checks. Findings: D6 (seed manifest). Crafted inputs
+in `tests/test_phase9_security.py`: path traversal, absolute paths, symlinks, NUL/invalid Unicode,
+corrupt and oversized JSON, duplicate export ids, wrong types — every case stops safely and touches
+nothing outside its directory.
+
+## 40. End-to-end acceptance and restore matrix
+
+`tests/test_phase9_acceptance.py` runs the 24 steps of the Phase 9 specification in one isolated data
+folder (empty install → reviewer → two partial imports → autosaved draft → restart → recovered draft →
+commit → approve → reject → restore an older revision → approve it → DOCX+TXT export verified file by
+file → verified backup → more work → confirmed restore → exact verification → displaced database →
+second export → TXT re-import into a new database → restart with session). It checks question ids,
+revision numbers, statuses, content hashes, provenance and the immutability of
+`original_content_json` throughout.
+
+Persistence semantics verified separately:
+
+| Object | Survives restart | Authoritative | Exported | Restored by a backup restore |
+|---|---|---|---|---|
+| autosaved draft | yes | no (cannot be approved) | never | yes, as it was at backup time |
+| saved revision | yes | yes, append-only | only if approved | yes |
+| approved revision | yes | the exact revision an APPROVE event binds | yes | yes |
+| export snapshot | files on disk, verified by manifest | — | — | files untouched; `export_runs` rows as at backup time |
+| backup | yes | copy of the database at one moment | — | never deleted by a restore |
+
+**Intended rollback on restore.** Restoring the backup rolls back exactly the work done after it — in
+the scenario: one EDIT revision, one APPROVE, one REOPEN, one draft and one import batch (3 questions).
+The test enumerates these rows exactly and proves nothing else changed. This is the confirmed effect
+of an explicit restore, not data loss: the replaced database is preserved bit-for-bit in `displaced/`
+and in the verified pre-restore safety backup, and restoring that safety backup brings the work back
+(`tests/test_phase9_restore_matrix.py`, cases: empty, partial, with drafts, with approved/rejected,
+full synthetic 10,000; plus the older-schema case in `test_restore_service`).
+
+## 41. Word/TXT accuracy audit
+
+`tests/test_phase9_document_audit.py`: fields of up to 12,000 characters mixing Georgian, Latin
+abbreviations, numerals, units, Greek letters, sub/superscripts, typographic quotes, dashes, `<`, `&`,
+`±`, `≥` and multiline options. Every DOCX is a valid ZIP whose XML parts are well-formed UTF-8 without
+control characters; python-docx reads every field back; **pandoc** (an independent DOCX reader,
+installed on the test machine) finds every line of every stem/option (and explanation in the review
+edition) and no explanation in the exam edition; TXT is UTF-8 without BOM, LF only, and re-imports
+identically. Microsoft Word and LibreOffice were **not** available: their rendering is not tested.
+
+## 42. Soak test, measurements and platform matrix
+
+`tools/soak_test.py` drives the real main window with a seeded random mix of reviewer actions (browse,
+go to, subject, quick filters, search, edit + autosave + save, approve-and-next, reject, reopen,
+history, manual backups, exports), samples RSS, open handles, OS threads, Qt pool activity and Python
+objects every 5 s, measures heartbeat lateness, closes unexpected dialogs and records them as failures,
+and finally closes the window and checks the database. Results of the Phase 9 run: see
+[docs/RELEASE_READINESS.md](docs/RELEASE_READINESS.md) and §43.
+
+| Platform / medium | Status |
+|---|---|
+| Linux (Debian 12, kernel 6.12), Python 3.12, PySide6 6.12, Qt offscreen | tested (full suite, soak, release check) |
+| Windows 10/11 | NOT TESTED (Windows-specific code paths reviewed only) |
+| Linux X11 / Wayland desktop session, CachyOS | NOT TESTED |
+| FAT32 / exFAT / USB / network drives | NOT TESTED |
+| Microsoft Word, LibreOffice rendering | NOT TESTED (python-docx + pandoc only) |
+| power loss | NOT TESTED |
+
+## 43. Phase 9 results, remaining risks and Phase 10 handoff
+
+### 43.1 Measured results (Linux, Debian 12, 2 CPUs, 8 GB, Qt offscreen)
+
+| Check | Result |
+|---|---|
+| Baseline suite at `5163d2a` | 1,067 passed |
+| Phase 9 suite | 1,189 passed, 0 failed, 0 skipped (≈ 314 s) |
+| `ruff check src tests tools` | all checks passed |
+| 24-step acceptance (`test_phase9_acceptance.py`) | passed |
+| Restore matrix incl. 10,000 synthetic questions | 5 passed (10,000-question case ≈ 3.7 s) |
+| Hypothesis fuzzing (`test_fuzz_inputs.py`) | passed, no crash or escape found |
+| Crash/interruption (`test_phase9_crash.py` + earlier crash suites) | passed |
+| Soak test (`--minutes 20 --questions 2000 --seed 9`) | passed: 1,200 s, ≈ 8,300 actions, 0 failures |
+| GUI stress: 14 GUI-heavy test files × 5 fresh runs | 5 × 322 passed, 0 failures, no flaky test seen |
+
+Soak details (single uninterrupted 20-minute run): heartbeat lateness p99 32 ms, max 79 ms (the GUI
+thread never blocked noticeably); RSS 119 MB at start, 128 MB after warm-up, 138 MB at the end
+(+10 MB in ~19 min, no runaway growth); open handles 6 → 9; OS threads ≤ 5; 10 backups and 8 exports
+completed in the background (an export action took up to 12.3 s and a debounced search up to 6.7 s of
+wall-clock *waiting*, while the window stayed responsive); window closed normally, thread pool drained,
+`integrity_check` = ok, 0 foreign-key problems, 2,805 revisions, 0 drafts left. An earlier attempt was
+discarded because its working folder was deleted by the operator during the run (all its failures were
+`no such table`); it is not counted.
+
+### 43.2 Remaining risks (not release blockers)
+
+- **Windows** was not run on a real machine in Phase 9 (only reviewed; the CI workflow added in
+  `.github/workflows/ci.yml` runs the suite on `windows-latest` — its result is the only Windows evidence).
+  A sharing violation caused by antivirus/indexers while replacing the database or renaming an export
+  folder is not retried: the operation fails, its intent journal stays, and the next start reconciles
+  it (export) or stops safely and asks for recovery (restore). This has not been observed on Windows.
+- **FAT32 / exFAT / USB sticks / network drives** were not tested. FAT has no atomic replace-over-rename
+  and no directory fsync; a copy interrupted on such a medium can leave a database without a manifest,
+  which the next copy reports as *destination exists* instead of overwriting it (§36).
+- **Power loss** was not tested. SIGKILL tests prove process-crash consistency only; durability on power
+  loss depends on the disk honouring `fsync` / `FlushFileBuffers`.
+- **Explicit restore rolls back** everything recorded after the backup (revisions, review events,
+  drafts, import batches and `export_runs` rows). This is the intended meaning of *restore*; the
+  displaced database is kept in `<data>/displaced/` and the pre-restore safety backup is verified, so
+  nothing is lost, but reviewers must be told. Displaced copies are never pruned automatically and can
+  grow.
+- The **seed manifest is unsigned**: it protects against corruption and mismatched files, not against a
+  deliberately forged seed package.
+- **Microsoft Word / LibreOffice rendering** was not inspected (python-docx and pandoc only).
+- **The real 10,000-question bank does not exist yet**. All capacity statements come from synthetic
+  banks; real Georgian text may differ in length distribution.
+- Qt's Georgian catalogue (`qtbase_ka.qm`) is loaded from PySide6's translations folder, with built-in
+  fallbacks for the essential buttons; an installer must keep that folder (or copy it to
+  `resources/translations`), otherwise less common Qt-drawn texts may appear in English.
+
+### 43.3 Release blockers
+
+None open. No defect found in Phase 9 silently overwrote or discarded a confirmed edit, review
+decision or saved draft; D1–D9 (§35) are fixed with regression tests. The machine-readable verdict is in
+`docs/release-readiness.json` (human-readable: `docs/RELEASE_READINESS.md`); every row that could not be
+executed on the test machine is marked NOT TESTED rather than PASS.
+
+### 43.4 Phase 10 handoff
+
+1. Installers / portable bundles for Windows and Linux (PyInstaller or equivalent), including fonts,
+   Qt platform plugins and `qtbase_ka.qm`; code signing if available.
+2. Run the full suite, `tools/soak_test.py` and `tools/release_check.py` on a **real Windows 10/11
+   machine** and on the reviewers' Linux desktop (CachyOS, X11/Wayland), and on a FAT32/exFAT USB stick
+   for *Save copy elsewhere* / *Add backup from file*.
+3. Open generated DOCX files in Microsoft Word and LibreOffice and have a native speaker check layout.
+4. Native-speaker review of all Georgian UI strings; screen-reader smoke test.
+5. When the real bank exists: build the private production seed, verify it with `--self-check`, and
+   repeat the restore matrix and soak test with it locally (never commit it).

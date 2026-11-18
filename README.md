@@ -12,15 +12,16 @@ and TXT files**.
 * The application **never generates questions**; it only works with imported ones.
 * The user interface is Georgian; code and technical documentation are English.
 
-> **Status: Phase 8 of 10 — reviewer workspace and safe backup restoration.** Working: import,
-> browsing and search, the editor with autosave and crash recovery, approval/rejection/restore, the
-> verified DOCX/TXT export and the bundled seed with a safe first launch (Phases 2–7); and now
-> **restoring the database from a verified backup** inside the program (safety backup first, atomic
-> replacement, crash recovery), quick status/draft filters, a full keyboard workflow (F1 lists the
-> shortcuts), Georgian for Qt's own dialog texts, per-subject counts with drafts and a read-only
-> comparison with a newer source (ARCHITECTURE.md §28–§30). The program works with an empty, a
-> partial or a complete bank. The real bank is not in this repository; everything is tested with
-> synthetic data.
+> **Status: Phase 9 of 10 — reliability, data integrity and release readiness (version 0.9.0).**
+> Working: import, browsing and search, the editor with autosave and crash recovery,
+> approval/rejection/restore, the verified DOCX/TXT export, the bundled seed with a safe first launch
+> and in-app restore from a verified backup (Phases 2–8). Phase 9 added a **daily automatic backup**,
+> **saving a verified backup copy to another drive** and **adding an external backup** for restore,
+> hardened handling of damaged or crafted journals/manifests, more crash-interruption tests, fuzzing,
+> a 24-step end-to-end acceptance test, a soak-test tool and a release-readiness report
+> ([docs/RELEASE_READINESS.md](docs/RELEASE_READINESS.md), ARCHITECTURE.md §34–§43). The program
+> works with an empty, a partial or a complete bank. The real bank is not in this repository;
+> everything is tested with synthetic data.
 
 ---
 
@@ -70,6 +71,10 @@ Qt chooses Wayland or X11 automatically. On an X11 session, Qt 6 needs the
 | `python -m vascqbank_desktop --seed-dir PATH` | Use this seed folder for a first launch (default: the bundled seed, if any; also `VASCQBANK_SEED_DIR`) |
 
 The data folder can also be set with the `VASCQBANK_DATA_DIR` environment variable.
+
+`--self-check` exit codes: `0` OK · `1` integrity problem · `2` storage error · `3` no database but
+traces of an earlier one (nothing created) · `4` the seed failed verification · `5` an interrupted
+restore needs a decision (nothing changed) · `6` the program is already running on this data folder.
 
 ## Where data is stored
 
@@ -173,6 +178,22 @@ database reopened and verified — only then is success shown. A failed restore 
 database as it was; a restore interrupted by a crash is finished or undone at the next start, and if
 that cannot be proven safe the program stops, changes nothing and lists the candidate files. Only one
 program window per data folder can run.
+
+## Automatic backups and copies on another drive (Phase 9)
+
+* **Daily automatic backup.** A few seconds after the program starts it looks at the newest *verified*
+  backup. Only if there is none yet, or if that backup is older than 24 hours **and** the database
+  changed since then (questions, revisions, decisions or drafts), does it create one new verified backup (type *ავტომატური —
+  დღიური*) in the background. The ten newest automatic backups are kept; manual, pre-import,
+  pre-migration, pre-restore and imported backups are never deleted automatically.
+* **ასლის შენახვა სხვაგან…** copies the selected verified backup *and* its manifest to a folder you
+  choose (for example a USB drive), reads both back and re-checks the SHA-256 there. An existing file
+  of the same name is never overwritten; the original backup is never touched.
+* **ასლის დამატება ფაილიდან…** takes a backup file (with its `.json` manifest) from another drive,
+  verifies it completely and adds a copy to the program's backup list (type *გარედან დამატებული*);
+  it can then be restored like any other backup, after the usual confirmation.
+* Everything is offline. Behaviour on real USB/FAT32/exFAT media has not been tested yet
+  ([docs/RELEASE_READINESS.md](docs/RELEASE_READINESS.md)).
 
 ## Keyboard (F1 shows the full list)
 
@@ -322,8 +343,19 @@ and press **რედაქტირება** (Ctrl+E).
 ```bash
 .venv/bin/python -m pytest                 # all tests, incl. the 10,000-question benchmark
 .venv/bin/python -m pytest -m "not perf"   # skip the benchmark
-ruff check src tests
+ruff check src tests tools
 ```
+
+Phase 9 tools (synthetic data only, nothing leaves the machine):
+
+```bash
+# long GUI soak test: random reviewer actions, memory/handle/thread sampling, JSON report
+QT_QPA_PLATFORM=offscreen .venv/bin/python tools/soak_test.py --minutes 20 --questions 2000 --output soak-report.json
+# release-readiness report (runs the suite, lint, self-check, git/data checks) → docs/
+QT_QPA_PLATFORM=offscreen .venv/bin/python tools/release_check.py --soak soak-report.json
+```
+
+`hypothesis` (in the `dev` extra) drives the fuzz tests in `tests/test_fuzz_inputs.py`.
 
 Test data is synthetic (`tests/synthetic.py`); no real question content is used.
 
@@ -345,7 +377,8 @@ src/vascqbank_desktop/
 ├── ui/            PySide6 widgets: catalog, detail, editor, autosave, workflow, history, drafts, export, backups, restore, comparison, shortcuts, reviewer, import; strings, localization, keys, theme, workers
 └── resources/     bundled fonts (Noto Sans, Noto Sans Georgian) and icon
 tools/             build_seed.py, prepare_package_seed.py — seed build and packaging; capture_screenshots*.py,
-                   make_export_samples.py — screenshots and samples (synthetic data)
+                   make_export_samples.py — screenshots and samples (synthetic data); soak_test.py,
+                   release_check.py — Phase 9 soak test and release-readiness report
 tests/             pytest suite, incl. layer-boundary, offline, crash-recovery (isolated SIGKILL children on temporary databases) and 10,000-question checks
 ```
 

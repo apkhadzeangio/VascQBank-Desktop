@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import sqlite3
 import time
@@ -260,12 +261,82 @@ def _write_journal(paths: AppPaths, data: dict[str, object]) -> None:
     _fsync_dir(target.parent)
 
 
+MAX_JOURNAL_BYTES = 1 << 20  # a real journal is < 2 KB; anything huge is not ours
+_STAMP = re.compile(r"^\d{8}-\d{6}-\d{6}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_TEMP_NAME = re.compile(r"^\.restore-[0-9a-f]{32}\.partial$")
+_STAGES = ("prepared", "displaced", "published")
+
+
+def _plain_name(value: object) -> bool:
+    """A single file name in one of our folders: no separator, no parent reference, no drive."""
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= 255
+        and value not in (".", "..")
+        and not any(c in value for c in "/\\:\x00")
+        and value.isprintable()
+    )
+
+
+def journal_problems(data: object) -> list[str]:
+    """Why a parsed restore journal cannot be trusted (empty list = every field is what we write).
+
+    Phase 9: every field that becomes a path is checked against the exact pattern this module
+    writes, so a damaged or crafted journal can never make the recovery delete or move a file
+    outside ``database/`` and ``displaced/`` (e.g. ``"temp": "/home/user/thesis.odt"``).
+    """
+    if not isinstance(data, dict):
+        return ["not a JSON object"]
+    problems: list[str] = []
+    if data.get("format") != JOURNAL_FORMAT:
+        problems.append("unknown journal format")
+    if data.get("stage") not in _STAGES:
+        problems.append("unknown stage")
+    if not isinstance(data.get("live_existed"), bool):
+        problems.append("live_existed is not a boolean")
+    if not isinstance(data.get("temp"), str) or not _TEMP_NAME.match(data["temp"]):
+        problems.append("temp is not a restore copy name")
+    stamp = data.get("stamp")
+    if not isinstance(stamp, str) or not _STAMP.match(stamp):
+        problems.append("stamp is malformed")
+    for key in ("temp_sha256", "backup_sha256"):
+        if not isinstance(data.get(key), str) or not _SHA256.match(data[key]):
+            problems.append(f"{key} is not a SHA-256")
+    original = data.get("original_sha256")
+    if data.get("live_existed") is True and (not isinstance(original, str) or not _SHA256.match(original)):
+        problems.append("original_sha256 is not a SHA-256")
+    if not _plain_name(data.get("backup")):
+        problems.append("backup is not a plain file name")
+    safety = data.get("safety_backup")
+    if safety is not None and not _plain_name(safety):
+        problems.append("safety_backup is not a plain file name")
+    displaced = data.get("displaced")
+    if not isinstance(displaced, list) or len(displaced) > 8:
+        problems.append("displaced is not a short list")
+    elif isinstance(stamp, str):
+        prefix = f"vascqbank-{stamp}-displaced.sqlite3"
+        for name in displaced:
+            if not (_plain_name(name) and name in (prefix, *(prefix + s for s in SIDE_SUFFIXES))):
+                problems.append("displaced names a file this restore did not create")
+                break
+    return problems
+
+
 def _read_journal(paths: AppPaths) -> dict[str, object] | None:
+    path = journal_path(paths)
     try:
-        data = json.loads(journal_path(paths).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        if path.stat().st_size > MAX_JOURNAL_BYTES:
+            log.error("Restore journal %s is implausibly large; not trusted", path)
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
         return None
-    return data if isinstance(data, dict) and data.get("format") == JOURNAL_FORMAT else None
+    problems = journal_problems(data)
+    if problems:
+        log.error("Restore journal %s is not trusted: %s", path, "; ".join(problems))
+        return None
+    return data
 
 
 def _remove_journal(paths: AppPaths) -> None:

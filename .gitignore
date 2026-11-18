@@ -27,6 +27,8 @@ env/
 .coverage.*
 htmlcov/
 .tox/
+.hypothesis/
+soak-report*.json
 
 # Local databases (SQLite and its WAL/SHM/journal side files)
 *.sqlite

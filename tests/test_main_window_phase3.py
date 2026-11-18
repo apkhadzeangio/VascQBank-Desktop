@@ -512,7 +512,15 @@ def test_restore_is_only_a_request_for_the_confirming_dialog(qtbot, window: Main
     view = window.backup_view
     window.show_page(PAGE_BACKUPS)
     labels = {b.text() for b in view.findChildren(QAbstractButton) if b.isVisibleTo(view) and b.text()}
-    assert labels == {strings.BK_CREATE, strings.BK_VERIFY_ALL, strings.BK_OPEN_FOLDER, strings.BK_RESTORE}
+    # Phase 9 added "save copy elsewhere" and "add from file": both only copy backup files.
+    assert labels == {
+        strings.BK_CREATE,
+        strings.BK_VERIFY_ALL,
+        strings.BK_OPEN_FOLDER,
+        strings.BK_RESTORE,
+        strings.BK_SAVE_COPY,
+        strings.BK_ADD_EXTERNAL,
+    }
     assert not view.restore_button.isEnabled()  # nothing selected yet
     view.create_backup()
     qtbot.waitUntil(lambda: not view.is_busy(), timeout=WAIT_MS)

@@ -41,6 +41,8 @@ class BackupKind(StrEnum):
     BEFORE_IMPORT = "BEFORE_IMPORT"
     BEFORE_MIGRATION = "BEFORE_MIGRATION"
     BEFORE_RESTORE = "BEFORE_RESTORE"  # the safety backup taken before a restore; never pruned
+    AUTOMATIC = "AUTOMATIC"  # Phase 9: the daily start-up backup (own retention, see auto_backup)
+    IMPORTED = "IMPORTED"  # Phase 9: copied in from an external location; never pruned
     OTHER = "OTHER"
 
 
@@ -77,6 +79,10 @@ def _kind(reason: str) -> BackupKind:
         return BackupKind.BEFORE_MIGRATION
     if reason.startswith("pre-restore"):
         return BackupKind.BEFORE_RESTORE
+    if reason == backup_db.DAILY_REASON:
+        return BackupKind.AUTOMATIC
+    if reason == "imported":
+        return BackupKind.IMPORTED
     return BackupKind.OTHER
 
 

@@ -16,6 +16,7 @@ from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QBrush, QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -28,7 +29,9 @@ from PySide6.QtWidgets import (
 )
 
 from vascqbank_desktop.config.paths import AppPaths
-from vascqbank_desktop.services import backup_service
+from vascqbank_desktop.services import auto_backup, backup_portability, backup_service
+from vascqbank_desktop.services.auto_backup import AutoBackupOutcome, AutoBackupResult
+from vascqbank_desktop.services.backup_portability import BackupCopyError, BackupCopyResult
 from vascqbank_desktop.services.backup_service import (
     BackupEntry,
     BackupKind,
@@ -47,6 +50,8 @@ _KIND_LABELS: dict[BackupKind, str] = {
     BackupKind.BEFORE_IMPORT: strings.BK_KIND_IMPORT,
     BackupKind.BEFORE_MIGRATION: strings.BK_KIND_MIGRATION,
     BackupKind.BEFORE_RESTORE: strings.BK_KIND_RESTORE,
+    BackupKind.AUTOMATIC: strings.BK_KIND_AUTOMATIC,
+    BackupKind.IMPORTED: strings.BK_KIND_IMPORTED,
     BackupKind.OTHER: strings.BK_KIND_OTHER,
 }
 _PROBLEM_LABELS: dict[BackupProblem, str] = {
@@ -55,7 +60,15 @@ _PROBLEM_LABELS: dict[BackupProblem, str] = {
     BackupProblem.CHECKSUM_MISMATCH: strings.BK_PROBLEM_CHECKSUM_MISMATCH,
     BackupProblem.UNREADABLE: strings.BK_PROBLEM_UNREADABLE,
     BackupProblem.COUNTS_MISMATCH: strings.BK_PROBLEM_COUNTS_MISMATCH,
+    BackupProblem.MANIFEST_INVALID: strings.BK_PROBLEM_MANIFEST_INVALID,
 }
+
+
+def copy_problem_text(error: object) -> str:
+    """Georgian wording for a failed copy / import (technical detail only goes to the log)."""
+    if isinstance(error, BackupCopyError):
+        return strings.BK_COPY_PROBLEMS.get(error.problem.value, error.problem.value)
+    return strings.BK_COPY_PROBLEMS["WRITE_FAILED"]
 
 COL_TIME, COL_KIND, COL_QUESTIONS, COL_SIZE, COL_STATUS, COL_FILE = range(6)
 
@@ -75,6 +88,7 @@ def status_text(entry: BackupEntry, *, checking: bool = False) -> str:
 class BackupView(QWidget):
     backupCreated = Signal(object)  # BackupEntry
     restoreRequested = Signal(object)  # Path of the selected backup (or None)
+    automaticBackupFinished = Signal(object)  # AutoBackupResult (Phase 9)
 
     def __init__(self, paths: AppPaths, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -86,6 +100,7 @@ class BackupView(QWidget):
         self._pending: set[str] = set()  # names being verified right now
         self._create_job: BackgroundJob | None = None
         self._verify_job: BackgroundJob | None = None
+        self._file_job: BackgroundJob | None = None  # save copy / add external (Phase 9)
 
         page = QVBoxLayout(self)
         page.setContentsMargins(40, 34, 40, 26)
@@ -112,6 +127,21 @@ class BackupView(QWidget):
         buttons.addStretch(1)
         buttons.addWidget(self.restore_button)
         page.addLayout(buttons)
+
+        # Phase 9: a second row, so that the first one still fits at 1280×720.
+        portable = QHBoxLayout()
+        self.save_copy_button = QPushButton(strings.BK_SAVE_COPY)
+        self.save_copy_button.setObjectName("SecondaryButton")
+        self.save_copy_button.setToolTip(strings.BK_SAVE_COPY_TOOLTIP)
+        self.save_copy_button.clicked.connect(lambda: self.save_copy())
+        self.add_external_button = QPushButton(strings.BK_ADD_EXTERNAL)
+        self.add_external_button.setObjectName("SecondaryButton")
+        self.add_external_button.setToolTip(strings.BK_ADD_EXTERNAL_TOOLTIP)
+        self.add_external_button.clicked.connect(lambda: self.add_external())
+        portable.addWidget(self.save_copy_button)
+        portable.addWidget(self.add_external_button)
+        portable.addStretch(1)
+        page.addLayout(portable)
 
         self.status_label = QLabel()
         self.status_label.setObjectName("InfoNotice")
@@ -171,7 +201,7 @@ class BackupView(QWidget):
         return list(self._entries)
 
     def is_busy(self) -> bool:
-        return self._create_job is not None or self._verify_job is not None
+        return self._create_job is not None or self._verify_job is not None or self._file_job is not None
 
     def is_creating(self) -> bool:
         """A backup of the live database is being written (verifying only reads backup files)."""
@@ -358,6 +388,109 @@ class BackupView(QWidget):
         self._set_status(strings.BK_CREATE_FAILED.format(detail=error), error=True)
         self._update_buttons()
 
+    # ------------------------------------------------------------------ automatic (Phase 9)
+    def start_automatic_backup(self) -> bool:
+        """Apply the daily start-up policy in the background (a no-op while a backup is written)."""
+        if self._create_job is not None:
+            return False
+        job = BackgroundJob(lambda: auto_backup.run_automatic_backup(self._paths), self)
+        job.succeeded.connect(lambda result: self._on_automatic_done(job, result))
+        job.failed.connect(
+            lambda error: self._on_automatic_done(
+                job, AutoBackupResult(AutoBackupOutcome.FAILED, detail=str(error))
+            )
+        )
+        self._create_job = job  # blocks a restore and a second backup meanwhile
+        self._update_buttons()
+        job.start()
+        return True
+
+    def _on_automatic_done(self, job: BackgroundJob, result: object) -> None:
+        assert isinstance(result, AutoBackupResult)
+        self._create_job = None
+        job.deleteLater()
+        if result.outcome is AutoBackupOutcome.CREATED:
+            self.refresh()
+            self._set_status(strings.BK_AUTO_CREATED.format(name=result.path.name if result.path else ""))
+        elif result.outcome is AutoBackupOutcome.FAILED:
+            self._set_status(strings.BK_AUTO_FAILED.format(detail=result.detail), error=True)
+        self._update_buttons()
+        self.automaticBackupFinished.emit(result)
+
+    # ------------------------------------------------------------------ portable copies (Phase 9)
+    def save_copy(self, destination: Path | None = None) -> bool:
+        """Write the selected backup and its manifest to another folder (asked if not given)."""
+        entry = self.selected_entry
+        if entry is None or self._file_job is not None:
+            return False
+        if destination is None:
+            folder = QFileDialog.getExistingDirectory(self, strings.BK_SAVE_COPY_TITLE)
+            if not folder:
+                return False
+            destination = Path(folder)
+        source = entry.path
+        target = destination
+        self._start_file_job(
+            lambda: backup_portability.save_backup_copy(source, target),
+            strings.BK_SAVING_COPY,
+            self._on_copy_saved,
+            strings.BK_COPY_FAILED,
+        )
+        return True
+
+    def add_external(self, source: Path | None = None) -> bool:
+        """Verify an externally stored backup and copy it into the list (the database is untouched)."""
+        if self._file_job is not None:
+            return False
+        if source is None:
+            file_name, _ = QFileDialog.getOpenFileName(
+                self, strings.BK_ADD_EXTERNAL_TITLE, "", strings.BK_ADD_EXTERNAL_FILTER
+            )
+            if not file_name:
+                return False
+            source = Path(file_name)
+        chosen = source
+        self._start_file_job(
+            lambda: backup_portability.import_external_backup(self._paths, chosen),
+            strings.BK_ADDING_EXTERNAL,
+            self._on_external_added,
+            strings.BK_EXTERNAL_FAILED,
+        )
+        return True
+
+    def _start_file_job(self, fn, busy_text: str, on_success, failure_text: str) -> None:  # noqa: ANN001
+        job = BackgroundJob(fn, self)
+        job.succeeded.connect(lambda result: self._on_file_job_done(job, on_success, result))
+        job.failed.connect(lambda error: self._on_file_job_failed(job, failure_text, error))
+        self._file_job = job
+        self._set_status(busy_text)
+        self._update_buttons()
+        job.start()
+
+    def _on_file_job_done(self, job: BackgroundJob, on_success, result: object) -> None:  # noqa: ANN001
+        self._file_job = None
+        job.deleteLater()
+        on_success(result)
+        self._update_buttons()
+
+    def _on_file_job_failed(self, job: BackgroundJob, failure_text: str, error: object) -> None:
+        self._file_job = None
+        job.deleteLater()
+        log.error("Backup copy failed: %s", error)
+        self._set_status(failure_text.format(reason=copy_problem_text(error)), error=True)
+        self._update_buttons()
+
+    def _on_copy_saved(self, result: object) -> None:
+        assert isinstance(result, BackupCopyResult)
+        self._set_status(strings.BK_COPY_SAVED.format(path=result.backup))
+
+    def _on_external_added(self, result: object) -> None:
+        assert isinstance(result, BackupCopyResult)
+        self.refresh()
+        self.select_backup(result.backup.name)
+        template = strings.BK_EXTERNAL_PRESENT if result.already_present else strings.BK_EXTERNAL_ADDED
+        self._set_status(template.format(name=result.backup.name))
+
     # ------------------------------------------------------------------ misc
     def open_folder(self) -> None:
         self._paths.backups_dir.mkdir(parents=True, exist_ok=True)
@@ -370,11 +503,12 @@ class BackupView(QWidget):
         self.status_label.setVisible(bool(text))
 
     def shutdown(self) -> None:
-        for job in (self._create_job, self._verify_job):
+        for job in (self._create_job, self._verify_job, self._file_job):
             if job is not None:
                 job.stop_and_wait()
         self._create_job = None
         self._verify_job = None
+        self._file_job = None
 
     def closeEvent(self, event) -> None:  # noqa: ANN001, N802
         self.shutdown()

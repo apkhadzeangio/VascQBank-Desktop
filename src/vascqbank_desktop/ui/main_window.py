@@ -21,6 +21,7 @@ from vascqbank_desktop import __version__
 from vascqbank_desktop.config.paths import AppPaths
 from vascqbank_desktop.domain.review_status import ReviewStatus
 from vascqbank_desktop.domain.subjects import Subject
+from vascqbank_desktop.services.auto_backup import AutoBackupOutcome, AutoBackupResult
 from vascqbank_desktop.services.catalog_service import CatalogService, SearchIndexStatus
 from vascqbank_desktop.services.draft_service import DraftService
 from vascqbank_desktop.services.edit_service import EditService
@@ -62,6 +63,7 @@ MIN_HEIGHT = 680
 DEFAULT_WIDTH = 1240
 DEFAULT_HEIGHT = 800
 SESSION_SAVE_DELAY_MS = 500
+AUTO_BACKUP_DELAY_MS = 3000  # Phase 9: let the window settle before the daily backup check
 
 
 class MainWindow(QMainWindow):
@@ -73,6 +75,7 @@ class MainWindow(QMainWindow):
         settings_store: SettingsStore | None = None,
         *,
         autosave_delay_ms: int = DEFAULT_DELAY_MS,
+        auto_backup: bool = False,
     ) -> None:
         super().__init__()
         self._status = status
@@ -161,6 +164,17 @@ class MainWindow(QMainWindow):
         self._restore_session()
         self._on_drafts_changed(self.draft_service.count())
         self._start_index_warmup()
+        self.backup_view.automaticBackupFinished.connect(self._on_automatic_backup)
+        if auto_backup:  # Phase 9: once per launch, after the window is usable (ARCHITECTURE.md §37)
+            QTimer.singleShot(AUTO_BACKUP_DELAY_MS, self, self.backup_view.start_automatic_backup)
+
+    def _on_automatic_backup(self, result: object) -> None:
+        if not isinstance(result, AutoBackupResult):
+            return
+        if result.outcome is AutoBackupOutcome.CREATED and result.path is not None:
+            self.statusBar().showMessage(strings.BK_AUTO_CREATED.format(name=result.path.name), 10_000)
+        elif result.outcome is AutoBackupOutcome.FAILED:
+            self.statusBar().showMessage(strings.BK_AUTO_FAILED.format(detail=result.detail), 15_000)
 
     # -- data ------------------------------------------------------------
     def refresh_counts(self) -> BankCounts:

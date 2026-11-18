@@ -24,7 +24,7 @@ from vascqbank_desktop import __version__
 from vascqbank_desktop.config.paths import AppPaths
 from vascqbank_desktop.db import question_repository as repo
 from vascqbank_desktop.db.backup import BackupInfo, create_backup, prune_automatic_backups
-from vascqbank_desktop.db.connection import open_database
+from vascqbank_desktop.db.connection import make_durable, open_database
 from vascqbank_desktop.db.migrations import LATEST_VERSION, get_schema_version, read_metadata, utc_now_iso
 from vascqbank_desktop.domain.question import ImportedQuestion, SourceKind
 from vascqbank_desktop.importexport.common import ParsedItem, SourceFile
@@ -306,7 +306,9 @@ def commit_import(
         if not unchanged:
             raise ImportAbortedError(f"source file changed after validation: {source_file.path}")
 
-    conn = open_database(paths.database_file)
+    # Phase 9: the import commit is synced like reviewer work (synchronous=FULL), so a confirmed
+    # import cannot silently vanish if the computer loses power right after it was reported done.
+    conn = make_durable(open_database(paths.database_file))
     try:
         if get_schema_version(conn) != LATEST_VERSION:
             raise ImportAbortedError("database schema is not up to date")

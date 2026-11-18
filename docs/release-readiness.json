@@ -1,0 +1,235 @@
+{
+  "application": "VascQBank Review Desktop",
+  "version": "0.9.0",
+  "generated_at": "2026-11-18T19:29:30+00:00",
+  "git_commit_checked": "5163d2a75a0102ce15cf017606af1a3d575e88c4",
+  "working_tree_dirty": true,
+  "verdict": "PASS",
+  "verdict_rule": "BLOCKED if any data-safety row fails; FAIL if any other row fails; NOT TESTED if the full test suite did not run here; otherwise PASS. NOT TESTED rows are listed as limitations and never counted as passes",
+  "blockers": [],
+  "failures": [],
+  "rows": [
+    {
+      "area": "full automated test suite",
+      "status": "PASS",
+      "evidence": "1189 passed, 0 failed, 0 skipped",
+      "data_safety": true
+    },
+    {
+      "area": "end-to-end acceptance (24 steps)",
+      "status": "PASS",
+      "evidence": "1 passed, 0 failed, 0 skipped — test_phase9_acceptance.py",
+      "data_safety": true
+    },
+    {
+      "area": "SQLite integrity and constraints",
+      "status": "PASS",
+      "evidence": "64 passed, 0 failed, 0 skipped — test_database.py, test_migration_v3.py, test_approved_contract.py, test_workflow_domain.py",
+      "data_safety": true
+    },
+    {
+      "area": "draft / edit / review data safety",
+      "status": "PASS",
+      "evidence": "124 passed, 0 failed, 0 skipped — test_edit_service.py, test_review_service.py, test_autosaver.py, test_crash_recovery.py",
+      "data_safety": true
+    },
+    {
+      "area": "crash and interruption recovery",
+      "status": "PASS",
+      "evidence": "88 passed, 0 failed, 0 skipped — test_phase9_crash.py, test_review_crash_recovery.py, test_restore_crash.py, test_gui_crash_recovery.py, test_gui_review_crash.py, test_seed_install.py",
+      "data_safety": true
+    },
+    {
+      "area": "export publication and recovery",
+      "status": "PASS",
+      "evidence": "30 passed, 0 failed, 0 skipped — test_export_publication.py, test_export_service.py",
+      "data_safety": true
+    },
+    {
+      "area": "backup and restore",
+      "status": "PASS",
+      "evidence": "68 passed, 0 failed, 0 skipped — test_backup.py, test_backup_service.py, test_restore_service.py, test_restore_gui.py, test_phase9_restore_matrix.py",
+      "data_safety": true
+    },
+    {
+      "area": "backup portability and automatic backups",
+      "status": "PASS",
+      "evidence": "24 passed, 0 failed, 0 skipped — test_backup_portability.py",
+      "data_safety": true
+    },
+    {
+      "area": "untrusted journals / manifests (security)",
+      "status": "PASS",
+      "evidence": "60 passed, 0 failed, 0 skipped — test_phase9_security.py",
+      "data_safety": true
+    },
+    {
+      "area": "fuzzing of parsers and readers (Hypothesis)",
+      "status": "PASS",
+      "evidence": "13 passed, 0 failed, 0 skipped — test_fuzz_inputs.py",
+      "data_safety": true
+    },
+    {
+      "area": "import parsing and validation",
+      "status": "PASS",
+      "evidence": "90 passed, 0 failed, 0 skipped — test_parse_paired.py, test_parse_master.py, test_import_service.py, test_issue_catalog.py",
+      "data_safety": true
+    },
+    {
+      "area": "Word/TXT export accuracy",
+      "status": "PASS",
+      "evidence": "41 passed, 0 failed, 0 skipped — test_export_roundtrip.py, test_txt_export.py, test_docx_export.py, test_phase9_document_audit.py",
+      "data_safety": true
+    },
+    {
+      "area": "empty installation / first launch",
+      "status": "PASS",
+      "evidence": "23 passed, 0 failed, 0 skipped — test_first_launch.py, test_app_startup.py, test_paths.py",
+      "data_safety": false
+    },
+    {
+      "area": "seed verification",
+      "status": "PASS",
+      "evidence": "16 passed, 0 failed, 0 skipped — test_seed_builder.py, test_seed_compare.py",
+      "data_safety": false
+    },
+    {
+      "area": "partial bank workflows (GUI)",
+      "status": "PASS",
+      "evidence": "91 passed, 0 failed, 0 skipped — test_main_window_workflow.py, test_main_window_editing.py, test_main_window_phase3.py, test_reviewer_ux.py",
+      "data_safety": false
+    },
+    {
+      "area": "synthetic 10,000-question bank (perf)",
+      "status": "PASS",
+      "evidence": "25 passed, 0 failed, 0 skipped — test_performance.py, test_phase8_performance.py, test_browse_performance.py, test_editing_performance.py, test_review_performance.py, test_export_performance.py, test_seed_performance.py",
+      "data_safety": false
+    },
+    {
+      "area": "Georgian localization and architecture rules",
+      "status": "PASS",
+      "evidence": "18 passed, 0 failed, 0 skipped — test_architecture.py, test_text.py",
+      "data_safety": false
+    },
+    {
+      "area": "session persistence and settings",
+      "status": "PASS",
+      "evidence": "39 passed, 0 failed, 0 skipped — test_session_service.py, test_settings_service.py",
+      "data_safety": false
+    },
+    {
+      "area": "lint (ruff check)",
+      "status": "PASS",
+      "evidence": "All checks passed!",
+      "data_safety": false
+    },
+    {
+      "area": "version consistency",
+      "status": "PASS",
+      "evidence": "pyproject 0.9.0, package 0.9.0",
+      "data_safety": false
+    },
+    {
+      "area": "no networking code (offline only)",
+      "status": "PASS",
+      "evidence": "no networking module imported anywhere in src/",
+      "data_safety": true
+    },
+    {
+      "area": "no question data or local data in git",
+      "status": "PASS",
+      "evidence": "240 tracked files checked: no databases, backups, exports, logs",
+      "data_safety": true
+    },
+    {
+      "area": "bundled Georgian fonts",
+      "status": "PASS",
+      "evidence": "NotoSans-Bold.ttf, NotoSans-Regular.ttf, NotoSansGeorgian-Bold.ttf, NotoSansGeorgian-Regular.ttf + OFL.txt",
+      "data_safety": false
+    },
+    {
+      "area": "Qt platform plugins present",
+      "status": "PASS",
+      "evidence": "PySide6 6.12.0: eglfs, linuxfb, minimal, minimalegl, offscreen, vkkhrdisplay, vnc, wayland, xcb",
+      "data_safety": false
+    },
+    {
+      "area": "runtime dependencies installable",
+      "status": "PASS",
+      "evidence": "declared: PySide6-Essentials>=6.7,<7, python-docx>=1.1,<2; installed: PySide6-Essentials 6.12.0, python-docx 1.2.0",
+      "data_safety": false
+    },
+    {
+      "area": "CLI self-check on an empty data folder",
+      "status": "PASS",
+      "evidence": "exit 0; VascQBank Review Desktop 0.9.0",
+      "data_safety": false
+    },
+    {
+      "area": "empty installation needs no question bank",
+      "status": "PASS",
+      "evidence": "0 questions in the new database; no seed bundled in the source tree",
+      "data_safety": false
+    },
+    {
+      "area": "startup exit codes (second self-check, existing database)",
+      "status": "PASS",
+      "evidence": "exit 0 (0 OK, 1 integrity, 2 storage, 3 recovery needed, 4 seed invalid, 5 restore interrupted, 6 already running — 1–6 are covered by the test suite)",
+      "data_safety": false
+    },
+    {
+      "area": "GUI soak test",
+      "status": "PASS",
+      "evidence": "20.0 min, 8331 actions, 2000 synthetic questions; RSS growth after warm-up 10100 KB, handles growth 1, heartbeat max lateness 79.0 ms; failures 0",
+      "data_safety": false
+    },
+    {
+      "area": "platform: this run",
+      "status": "PASS",
+      "evidence": "Linux 6.12.105+ (x86_64), Python 3.12.16, Qt platform offscreen, SQLite 3.53.1",
+      "data_safety": false
+    },
+    {
+      "area": "platform: Windows 10/11",
+      "status": "NOT TESTED",
+      "evidence": "not run on Windows in this check",
+      "data_safety": false
+    },
+    {
+      "area": "platform: Linux X11 / Wayland desktop session",
+      "status": "NOT TESTED",
+      "evidence": "offscreen Qt only",
+      "data_safety": false
+    },
+    {
+      "area": "file systems: FAT32 / exFAT / network drives / USB media",
+      "status": "NOT TESTED",
+      "evidence": "not available here",
+      "data_safety": false
+    },
+    {
+      "area": "Microsoft Word rendering",
+      "status": "NOT TESTED",
+      "evidence": "not available; DOCX checked with python-docx (+ pandoc)",
+      "data_safety": false
+    },
+    {
+      "area": "LibreOffice rendering",
+      "status": "NOT TESTED",
+      "evidence": "not installed",
+      "data_safety": false
+    },
+    {
+      "area": "power loss / OS crash",
+      "status": "NOT TESTED",
+      "evidence": "only process kills were tested; no power-failure claim",
+      "data_safety": false
+    },
+    {
+      "area": "installer / packaged build",
+      "status": "NOT TESTED",
+      "evidence": "Phase 10",
+      "data_safety": false
+    }
+  ]
+}

@@ -253,6 +253,7 @@ def cleanup_stale_staging(destination: Path) -> list[Path]:
     for candidate in destination.iterdir():
         if (
             candidate.is_dir()
+            and not candidate.is_symlink()
             and candidate.name.startswith(STAGING_PREFIX)
             and candidate.name.endswith(STAGING_SUFFIX)
             and (candidate / STAGING_MARKER).is_file()
@@ -357,13 +358,13 @@ class ExportService:
             report(ExportPhase.PUBLISH, 0, 1, final.name)
             run_ids = self._publish(plan, staging, final, files, manifest, export_id)
         except _Cancelled as exc:
-            self._discard(staging, export_id)
+            self._discard(staging, export_id, final)
             raise ExportCancelled("the export was cancelled; nothing was published") from exc
         except OSError as exc:
-            self._discard(staging, export_id)
+            self._discard(staging, export_id, final)
             raise ExportStorageError(_storage(exc)) from exc
         except BaseException:
-            self._discard(staging, export_id)
+            self._discard(staging, export_id, final)
             raise
         timings["total"] = time.perf_counter() - started
         report(ExportPhase.DONE, 1, 1, final.name)
@@ -638,11 +639,20 @@ class ExportService:
         export_repository._checkpoint("journal-removed")
         return ids
 
-    def _discard(self, staging: Path, export_id: str | None = None) -> None:
-        """Remove our own unfinished staging folder (never anything else) and its journal entry."""
-        if staging.name.startswith(STAGING_PREFIX) and staging.is_dir():
+    def _discard(self, staging: Path, export_id: str | None = None, final: Path | None = None) -> None:
+        """Remove our own unfinished staging folder (never anything else) and its journal entry.
+
+        Phase 9: if the final folder exists (the rename happened, and moving it back failed, or only
+        the journal removal failed after the commit), the journal is **kept**: the next
+        reconciliation verifies that folder and records it exactly once instead of leaving a
+        published export that nothing knows about.
+        """
+        if staging.name.startswith(STAGING_PREFIX) and staging.is_dir() and not staging.is_symlink():
             shutil.rmtree(staging, ignore_errors=True)
         if export_id is not None:
+            if final is not None and final.exists():
+                log.error("Export folder %s exists after a failure; its journal is kept", final)
+                return
             export_publication.remove_journal(export_publication.journal_path(self._paths, export_id))
 
     def reconcile(self) -> export_publication.ReconcileReport:

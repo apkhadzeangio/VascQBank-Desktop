@@ -107,8 +107,38 @@ def _safe_console() -> None:
                 reconfigure(errors="backslashreplace")
 
 
+def _self_check_lock(paths: AppPaths):  # noqa: ANN202 - QLockFile | None | False
+    """The instance lock for ``--self-check`` (Phase 9).
+
+    The self-check runs the same start-up recovery as the program (interrupted restore, stray
+    files); doing that while a program with the same data folder is running could interfere with
+    its restore. Only ``QtCore`` is used (no display needed). Returns ``False`` when another
+    instance holds the lock, ``None`` when Qt is unavailable (then the check runs unlocked).
+    """
+    try:
+        from PySide6.QtCore import QLockFile
+    except ImportError:  # pragma: no cover - PySide6 is a hard dependency
+        return None
+    paths.data_dir.mkdir(parents=True, exist_ok=True)
+    lock = QLockFile(str(paths.data_dir / LOCK_NAME))
+    lock.setStaleLockTime(0)
+    return lock if lock.tryLock(0) else False
+
+
 def run_self_check(paths: AppPaths, seed_dir: Path | None = None) -> int:
     _safe_console()
+    lock = _self_check_lock(paths)
+    if lock is False:
+        print("ALREADY RUNNING: the program is open with this data folder; nothing was checked")
+        return EXIT_ALREADY_RUNNING
+    try:
+        return _run_self_check(paths, seed_dir)
+    finally:
+        if lock is not None:
+            lock.unlock()
+
+
+def _run_self_check(paths: AppPaths, seed_dir: Path | None) -> int:
     try:
         result = prepare_storage(paths, seed_dir)
     except STORAGE_ERRORS as exc:
@@ -396,7 +426,9 @@ def run_gui(
         box.exec()
         return EXIT_STORAGE_ERROR
 
-    window = MainWindow(status, SUBJECTS, app_icon=icon)
+    # Phase 9: the daily automatic backup. Timed smoke runs (--exit-after-ms) quit without closing
+    # the window, so they skip it rather than leave a backup job running at interpreter exit.
+    window = MainWindow(status, SUBJECTS, app_icon=icon, auto_backup=exit_after_ms <= 0)
     window.show()
     install_signal_shutdown(app, window)
     if exit_after_ms > 0:
