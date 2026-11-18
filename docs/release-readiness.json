@@ -1,9 +1,9 @@
 {
   "application": "VascQBank Review Desktop",
   "version": "0.9.0",
-  "generated_at": "2026-11-18T19:29:30+00:00",
-  "git_commit_checked": "5163d2a75a0102ce15cf017606af1a3d575e88c4",
-  "working_tree_dirty": true,
+  "generated_at": "2026-11-18T20:05:45+00:00",
+  "git_commit_checked": "af824988d7907086bd88f0c5d9bd5e916de1ffc9",
+  "working_tree_dirty": false,
   "verdict": "PASS",
   "verdict_rule": "BLOCKED if any data-safety row fails; FAIL if any other row fails; NOT TESTED if the full test suite did not run here; otherwise PASS. NOT TESTED rows are listed as limitations and never counted as passes",
   "blockers": [],
@@ -138,7 +138,7 @@
     {
       "area": "no question data or local data in git",
       "status": "PASS",
-      "evidence": "240 tracked files checked: no databases, backups, exports, logs",
+      "evidence": "254 tracked files checked: no databases, backups, exports, logs",
       "data_safety": true
     },
     {
