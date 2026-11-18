@@ -7,7 +7,6 @@ database (the application has no bulk approval).
 
 from __future__ import annotations
 
-import resource
 import sys
 import time
 from pathlib import Path
@@ -23,6 +22,10 @@ from vascqbank_desktop.services import import_service as svc
 from vascqbank_desktop.services.approved_service import ApprovedQuestionsService
 from vascqbank_desktop.services.export_service import ExportFormat, ExportRequest, ExportService
 from vascqbank_desktop.services.storage import initialize_storage
+
+# ``resource`` (peak RSS) exists only on POSIX; on Windows this benchmark is reported as skipped
+# instead of breaking collection of the whole suite.
+resource = pytest.importorskip("resource")
 
 pytestmark = pytest.mark.perf
 
