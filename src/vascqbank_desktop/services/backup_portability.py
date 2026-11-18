@@ -29,6 +29,7 @@ import hashlib
 import json
 import logging
 import os
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -155,7 +156,7 @@ def _publish_no_overwrite(temp: Path, final: Path) -> None:
             raise FileExistsError(errno.EEXIST, "destination exists", str(final)) from None
         os.rename(temp, final)
         return
-    temp.unlink(missing_ok=True)
+    # the temporary name is removed by the caller (failing to remove it does not undo the publication)
 
 
 class _Created:
@@ -178,10 +179,26 @@ def _copy_file(source: Path | bytes, final: Path, expected_sha: str, created: _C
         if digest != expected_sha:
             raise BackupCopyError(CopyProblem.VERIFY_FAILED, f"{final.name}: SHA-256 differs while copying")
         _publish_no_overwrite(temp, final)
+        # Phase 9b: registered the moment it exists, so a later failure removes it again (before, a
+        # failing removal of the temp file left the published file behind, unregistered)
+        created.files.append(final)
     finally:
-        temp.unlink(missing_ok=True)
-    created.files.append(final)
+        _remove_temp(temp)
     return size
+
+
+def _remove_temp(temp: Path, attempts: int = 3) -> None:
+    """Remove a temporary file; retried briefly (on Windows an antivirus scanner may hold a file it
+    has just seen being written). A temp file that still cannot be removed is only clutter."""
+    for attempt in range(1, attempts + 1):
+        try:
+            temp.unlink(missing_ok=True)
+            return
+        except OSError:
+            if attempt == attempts:
+                log.warning("Could not remove the temporary file %s", temp)
+                return
+            time.sleep(0.05 * attempt)
 
 
 def _verified_source(source: Path) -> tuple[dict[str, object], bytes]:

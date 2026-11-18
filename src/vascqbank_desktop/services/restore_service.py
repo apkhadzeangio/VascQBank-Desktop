@@ -349,7 +349,8 @@ def _read_journal(paths: AppPaths) -> dict[str, object] | None:
 def _remove_journal(paths: AppPaths) -> None:
     journal_path(paths).unlink(missing_ok=True)
     journal_path(paths).with_name("restore.json.tmp").unlink(missing_ok=True)
-    _fsync_dir(journal_path(paths).parent)
+    if journal_path(paths).parent.is_dir():  # Phase 9b: the folder may never have been created
+        _fsync_dir(journal_path(paths).parent)
 
 
 def _side_files(database: Path) -> list[Path]:
@@ -484,14 +485,17 @@ def restore_backup(
 
     timings: dict[str, float] = {}
     started = time.perf_counter()
-    paths.ensure_directories()
-    if journal_path(paths).exists():
-        raise RestoreRefused(RestoreProblem.INTERRUPTED_RESTORE_PENDING, str(journal_path(paths)))
-    for stray in stray_temporary_files(paths):  # left by a restore that crashed before its journal
-        stray.unlink()
+    try:
+        paths.ensure_directories()
+        if journal_path(paths).exists():
+            raise RestoreRefused(RestoreProblem.INTERRUPTED_RESTORE_PENDING, str(journal_path(paths)))
+        for stray in stray_temporary_files(paths):  # left by a restore that crashed before its journal
+            stray.unlink()
 
-    step("verify")
-    summary = inspect_backup(backup_path)
+        step("verify")
+        summary = inspect_backup(backup_path)
+    except (OSError, sqlite3.Error) as exc:  # Phase 9b: never an unclassified error (nothing touched yet)
+        raise RestoreRefused(RestoreProblem.UNREADABLE, f"{type(exc).__name__}: {exc}") from exc
     if summary.sha256 != expected_sha256:
         raise RestoreRefused(RestoreProblem.CHANGED_SINCE_CHECK, backup_path.name)
     timings["verify"] = time.perf_counter() - started
@@ -504,16 +508,24 @@ def restore_backup(
     if live_existed:
         step("safety-backup")
         mark = time.perf_counter()
-        _quiesce_live_database(paths)
-        conn = open_database(live)
         try:
-            safety = backup_db.create_backup(conn, paths.backups_dir, SAFETY_REASON).path
-        except Exception as exc:
-            raise RestoreRefused(RestoreProblem.SAFETY_BACKUP_FAILED, str(exc)) from exc
-        finally:
-            conn.close()
-        _quiesce_live_database(paths)
-        original_sha = sha256_file(live)
+            _quiesce_live_database(paths)
+            conn = open_database(live)
+            try:
+                safety = backup_db.create_backup(conn, paths.backups_dir, SAFETY_REASON).path
+            finally:
+                conn.close()
+            _quiesce_live_database(paths)
+            original_sha = sha256_file(live)
+        except RestoreRefused:
+            raise
+        except Exception as exc:  # Phase 9b: opening the live database counts too, not only the copy
+            problem = (
+                RestoreProblem.DATABASE_BUSY
+                if isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower()
+                else RestoreProblem.SAFETY_BACKUP_FAILED
+            )
+            raise RestoreRefused(problem, f"{type(exc).__name__}: {exc}") from exc
         timings["safety_backup"] = time.perf_counter() - mark
         _checkpoint("safety-backup")
 

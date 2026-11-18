@@ -61,7 +61,7 @@ def problem_text(error: object) -> str:
     """Georgian wording for a refused or failed restore."""
     if isinstance(error, RestoreRefused):
         return strings.RS_PROBLEMS.get(error.problem.value, error.problem.value)
-    return str(error)
+    return strings.RS_PROBLEM_UNEXPECTED.format(detail=error)  # Phase 9b: Georgian, detail kept
 
 
 def details_text(summary: BackupSummary, kind: BackupKind) -> str:

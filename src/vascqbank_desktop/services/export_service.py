@@ -339,8 +339,14 @@ class ExportService:
         staging = destination / f"{STAGING_PREFIX}{export_id}{STAGING_SUFFIX}"
         try:
             staging.mkdir()
+        except OSError as exc:
+            raise ExportStorageError(_storage(exc)) from exc
+        try:
             (staging / STAGING_MARKER).write_text(export_id, encoding="utf-8")
         except OSError as exc:
+            # Phase 9b: mkdir succeeded, so the folder is ours (and empty but for a partial marker); without
+            # a complete marker cleanup_stale_staging would never recognise it, so remove it here
+            shutil.rmtree(staging, ignore_errors=True)
             raise ExportStorageError(_storage(exc)) from exc
 
         def check_cancel() -> None:
