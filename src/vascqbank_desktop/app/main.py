@@ -43,6 +43,7 @@ EXIT_RECOVERY_NEEDED = 3  # no database, but traces of an earlier one: nothing w
 EXIT_SEED_INVALID = 4  # the bundled seed failed verification: nothing was created
 EXIT_RESTORE_INTERRUPTED = 5  # an interrupted restore needs the reviewer's decision: nothing was changed
 EXIT_ALREADY_RUNNING = 6  # another instance uses the same data folder
+EXIT_DATABASE_DAMAGED = 7  # Phase 9b: the working database is empty or damaged: nothing was changed
 LOCK_NAME = "vascqbank.lock"
 
 _LOCKS: list[object] = []
@@ -153,6 +154,10 @@ def _run_self_check(paths: AppPaths, seed_dir: Path | None) -> int:
     if result.outcome is Outcome.SEED_INVALID:
         print(f"SEED INVALID: {result.seed_problem}; nothing was created", file=sys.stderr)
         return EXIT_SEED_INVALID
+    if result.outcome is Outcome.DATABASE_DAMAGED:
+        damage = result.damage.value if result.damage else "?"
+        print(f"DATABASE DAMAGED ({damage}): {result.damage_detail}; nothing was changed", file=sys.stderr)
+        return EXIT_DATABASE_DAMAGED
     if result.outcome is Outcome.RESTORE_INTERRUPTED:
         recovery = result.restore_recovery
         print(
@@ -257,6 +262,77 @@ def ask_recovery(evidence: Sequence[Evidence], data_dir: Path, exit_after_ms: in
     return "exit"
 
 
+def ask_damaged(result: StartupResult, data_dir: Path, exit_after_ms: int = 0) -> str:
+    """Phase 9b: ``"restore"``, ``"continue"`` (only if the file opens), ``"new"`` (only for an empty
+    file; confirmed twice), ``"open"`` (open the data folder and quit) or ``"exit"`` (the default)."""
+    from PySide6.QtCore import QTimer, QUrl
+    from PySide6.QtGui import QDesktopServices
+    from PySide6.QtWidgets import QMessageBox
+
+    from vascqbank_desktop.services.startup import DamageKind
+    from vascqbank_desktop.ui import strings
+
+    text = {
+        DamageKind.EMPTY: strings.DAMAGED_TEXT_EMPTY,
+        DamageKind.CORRUPT: strings.DAMAGED_TEXT_CORRUPT,
+        DamageKind.CHECK_FAILED: strings.DAMAGED_TEXT_CHECK,
+    }.get(result.damage, strings.DAMAGED_TEXT_CORRUPT)  # type: ignore[arg-type]
+    lines = [text]
+    if result.evidence:
+        lines += ["", strings.RECOVERY_FOUND]
+        lines += [
+            f"• {strings.RECOVERY_EVIDENCE[e.kind.value].format(count=len(e.paths))}" for e in result.evidence
+        ]
+    lines += ["", strings.DAMAGED_HOWTO]
+    box = QMessageBox(QMessageBox.Icon.Critical, strings.DAMAGED_TITLE, "\n".join(lines))
+    box.setDetailedText(f"{result.damage_detail}\n\n{data_dir}")
+    restore_button = box.addButton(strings.DAMAGED_RESTORE, QMessageBox.ButtonRole.ActionRole)
+    restore_button.setEnabled(any(e.kind.value == "BACKUPS" for e in result.evidence))
+    continue_button = None
+    if result.damage is DamageKind.CHECK_FAILED and result.status is not None:
+        continue_button = box.addButton(strings.DAMAGED_CONTINUE, QMessageBox.ButtonRole.AcceptRole)
+    new_button = None
+    if result.damage is DamageKind.EMPTY:
+        new_button = box.addButton(strings.DAMAGED_NEW, QMessageBox.ButtonRole.DestructiveRole)
+    open_button = box.addButton(strings.RECOVERY_OPEN_FOLDER, QMessageBox.ButtonRole.HelpRole)
+    exit_button = box.addButton(strings.RECOVERY_EXIT, QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(exit_button)
+    if exit_after_ms:
+        QTimer.singleShot(exit_after_ms, box.reject)
+    box.exec()
+    clicked = box.clickedButton()
+    if clicked is restore_button:
+        return "restore"
+    if continue_button is not None and clicked is continue_button:
+        return "continue"
+    if new_button is not None and clicked is new_button:
+        confirm = QMessageBox.question(
+            None,
+            strings.RECOVERY_CONFIRM_TITLE,
+            strings.RECOVERY_CONFIRM_TEXT,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return "new" if confirm == QMessageBox.StandardButton.Yes else "exit"
+    if clicked is open_button:
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(data_dir)))
+        return "open"
+    return "exit"
+
+
+def _show_set_aside_failed(detail: str, exit_after_ms: int = 0) -> None:
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QMessageBox
+
+    from vascqbank_desktop.ui import strings
+
+    box = QMessageBox(QMessageBox.Icon.Critical, strings.DAMAGED_TITLE, strings.DAMAGED_SET_ASIDE_FAILED)
+    box.setDetailedText(detail)
+    if exit_after_ms:
+        QTimer.singleShot(exit_after_ms, box.reject)
+    box.exec()
+
+
 def ask_restore(paths: AppPaths, exit_after_ms: int = 0) -> bool:
     """The restore dialog for a missing database; ``True`` once a backup was restored and verified."""
     from PySide6.QtCore import QTimer
@@ -340,9 +416,33 @@ def startup(paths: AppPaths, seed_dir: Path | None, exit_after_ms: int = 0) -> S
     try:
         result = prepare_storage(paths, seed_dir)
         notice = result.restore_recovery
-        while result.outcome is Outcome.RECOVERY_NEEDED:
+        while result.outcome in (Outcome.RECOVERY_NEEDED, Outcome.DATABASE_DAMAGED):
             if splash is not None:
                 splash.close()
+            if result.outcome is Outcome.DATABASE_DAMAGED:  # Phase 9b
+                choice = ask_damaged(result, paths.data_dir, exit_after_ms)
+                if choice == "continue":
+                    result = prepare_storage(paths, seed_dir, accept_damaged=True)
+                elif choice == "new":
+                    result = prepare_storage(paths, seed_dir, allow_new_database=True)
+                elif choice == "restore":
+                    from vascqbank_desktop.services.restore_service import (
+                        RestoreRefused,
+                        set_aside_damaged_database,
+                    )
+
+                    try:
+                        set_aside_damaged_database(paths)
+                    except (OSError, RestoreRefused) as exc:
+                        log.exception("The damaged database could not be set aside")
+                        _show_set_aside_failed(f"{type(exc).__name__}: {exc}", exit_after_ms)
+                        return EXIT_DATABASE_DAMAGED
+                    if ask_restore(paths, exit_after_ms):
+                        notice = None
+                    result = prepare_storage(paths, seed_dir)  # restored, or the ordinary recovery
+                else:
+                    return EXIT_DATABASE_DAMAGED
+                continue
             choice = ask_recovery(result.evidence, paths.data_dir, exit_after_ms)
             if choice == "restore":
                 if ask_restore(paths, exit_after_ms):

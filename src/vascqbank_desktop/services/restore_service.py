@@ -658,6 +658,37 @@ def _undo_publication(paths: AppPaths, journal: dict[str, object]) -> None:
     _remove_journal(paths)
 
 
+def set_aside_damaged_database(paths: AppPaths) -> tuple[Path, ...]:
+    """Move a damaged working database (and its side files) into ``displaced/`` — never delete it.
+
+    Phase 9b. Used only after the reviewer explicitly chose to restore a backup in place of a working
+    database that start-up found damaged (``Outcome.DATABASE_DAMAGED``). Each file is *renamed*
+    (atomic, same folder tree, no copy that could fail half-way) to
+    ``displaced/vascqbank-<stamp>-damaged.sqlite3[-wal|-shm|-journal]`` and so stays available
+    byte-for-byte; afterwards the folder is in the ordinary "database missing" state, whose restore
+    (situation A) is journaled and verified. Refused while an interrupted restore is pending.
+    """
+    if journal_path(paths).exists():
+        raise RestoreRefused(RestoreProblem.INTERRUPTED_RESTORE_PENDING, str(journal_path(paths)))
+    live = paths.database_file
+    if not live.is_file():
+        return ()
+    folder = displaced_dir(paths)
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"vascqbank-{_stamp()}-damaged.sqlite3"
+    moved: list[Path] = []
+    for source in (live, *_side_files(live)):
+        destination = Path(f"{target}{source.name[len(live.name) :]}")
+        if destination.exists():  # never overwrite anything (the stamp makes this practically impossible)
+            raise RestoreRefused(RestoreProblem.PUBLISH_FAILED, f"{destination.name} already exists")
+        os.replace(source, destination)
+        moved.append(destination)
+    _fsync_dir(folder)
+    _fsync_dir(paths.database_dir)
+    log.warning("Damaged working database set aside: %s", ", ".join(p.name for p in moved))
+    return tuple(moved)
+
+
 # ----------------------------------------------------------------------------------- recovery
 class RecoveryOutcome(StrEnum):
     NONE = "NONE"  # no interrupted restore
