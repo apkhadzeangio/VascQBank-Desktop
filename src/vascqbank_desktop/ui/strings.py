@@ -16,6 +16,7 @@ NAV_HOME: Final = "მთავარი"
 NAV_CATALOG: Final = "კითხვები"
 NAV_BACKUPS: Final = "სარეზერვო ასლები"
 NAV_REVIEWER: Final = "რეცენზენტი"
+NAV_EXPORT: Final = "ექსპორტი"
 SUBJECTS_SECTION: Final = "თემები"
 SUBJECTS_HINT: Final = (
     "აირჩიეთ თემა მისი კითხვების სანახავად. თემა, რომელშიც კითხვები ჯერ არ არის, მიუწვდომელია."
@@ -587,3 +588,84 @@ WF_RESTORE_DRAFT: Final = "ამ კითხვას აქვს დაუ�
 WF_RESTORE_KEEP_DRAFT: Final = "დაბრუნება, მონახაზის დატოვებით"
 WF_RESTORE_DISCARD_DRAFT: Final = "მონახაზის გაუქმება და დაბრუნება"
 WF_RESTORE_CONFIRM: Final = "დაბრუნება"
+
+
+# Export (Phase 6)
+EX_TITLE: Final = "დამტკიცებული კითხვების ექსპორტი"
+EX_INTRO: Final = (
+    "Word (.docx) და TXT ფაილები იქმნება მხოლოდ დამტკიცებული რედაქციებიდან. მონახაზები, "
+    "განხილვის მოლოდინში/პროცესში მყოფი და უარყოფილი კითხვები ფაილებში არასოდეს მოხვდება. "
+    "ექსპორტი ბაზაში არაფერს ცვლის."
+)
+EX_SUBJECTS: Final = "თემები"
+EX_SUBJECT_ROW: Final = "{code} — {name}   ·   დამტკიცებული {approved} / {total}"
+EX_ALL: Final = "ყველა"
+EX_NONE: Final = "არცერთი"
+EX_FORMATS: Final = "ფორმატი"
+EX_DOCX: Final = "Word (.docx) — ძირითადი ფორმატი"
+EX_TXT: Final = "TXT — VascQBank-ის წყვილი ფაილები (_questions / _explanations)"
+EX_EDITIONS: Final = "Word-ის ვერსია"
+EX_REVIEW: Final = "განხილვის ვერსია — პასუხები მონიშნული, განმარტებებით"
+EX_EXAM: Final = "საგამოცდო ვერსია — სწორი პასუხების გარეშე"
+EX_KEY: Final = "პასუხების გასაღები — პასუხები და განმარტებები"
+EX_LAYOUT: Final = "Word ფაილები"
+EX_PER_SUBJECT: Final = "ცალკე ფაილი თითო თემაზე"
+EX_COMBINED: Final = "ერთი ფაილი ყველა არჩეული თემით"
+EX_FONT: Final = "შრიფტი"
+EX_DESTINATION: Final = "საქაღალდე"
+EX_CHOOSE: Final = "არჩევა…"
+EX_CHOOSE_TITLE: Final = "ექსპორტის საქაღალდის არჩევა"
+EX_PREVIEW: Final = "რა შეიქმნება"
+EX_PREVIEW_LOADING: Final = "ითვლება…"
+EX_P_SUBJECTS: Final = "არჩეული თემები: {subjects}"
+EX_P_APPROVED: Final = "დამტკიცებული კითხვები (ექსპორტდება): {count}"
+EX_P_EXCLUDED: Final = "გამოტოვებული, რადგან დამტკიცებული არ არის: {count}"
+EX_P_MODE: Final = "Word-ის ვერსია: {modes}"
+EX_P_FORMATS: Final = "ფორმატი: {formats}"
+EX_P_DESTINATION: Final = "საქაღალდე: {folder}"
+EX_P_FOLDER: Final = (
+    "ახალი ქვესაქაღალდე: VascQBank_Export_<თარიღი-დრო>-<ID> (წინა ექსპორტი არასოდეს გადაიწერება)"
+)
+EX_P_FILES: Final = "ფაილები:"
+EX_NOTHING_SELECTED: Final = "აირჩიეთ მინიმუმ ერთი თემა, ფორმატი და (Word-ისთვის) ვერსია და ფაილის ტიპი."
+EX_EMPTY: Final = "არჩეულ თემებში დამტკიცებული კითხვა არ არის — ცარიელი დოკუმენტი არ შეიქმნება."
+EX_BLOCKED_TXT: Final = (
+    "TXT ფორმატი ამ კითხვების ტექსტს უცვლელად ვერ დაიტევს. შეასწორეთ ტექსტი და ხელახლა "
+    "დაამტკიცეთ, ან აირჩიეთ მხოლოდ Word:"
+)
+EX_BLOCKED_CONTRACT: Final = "ბაზაში დამტკიცების მონაცემები შეუსაბამოა — ექსპორტი შეჩერდა:"
+EX_TXT_PROBLEM: Final = {
+    "BLANK_LINE": "ველში ცარიელი სტრიქონია (TXT-ში ის კითხვას ყოფს)",
+    "ASTERISK": "ტექსტში * სიმბოლოა (TXT-ში ის სწორი პასუხის ნიშანია)",
+    "LOOKS_LIKE_OPTION": "სტრიქონი პასუხის ვარიანტს ჰგავს (მაგ. „ბ) …“)",
+    "LOOKS_LIKE_NUMBER": "ვარიანტის სტრიქონი ნომრით იწყება (მაგ. „12. …“)",
+    "EDGE_SPACES": "სტრიქონის დასაწყისში ან ბოლოს ზედმეტი ჰარია",
+    "LEADING_MARKER": "განმარტება * სიმბოლოთი იწყება",
+}
+EX_START: Final = "ექსპორტი"
+EX_CANCEL: Final = "შეწყვეტა"
+EX_OPEN_FOLDER: Final = "საქაღალდის გახსნა"
+EX_PHASES: Final = {
+    "SNAPSHOT": "დამტკიცებული კითხვების წაკითხვა",
+    "TXT": "TXT ფაილების შექმნა",
+    "DOCX": "Word დოკუმენტების შექმნა",
+    "VERIFY": "შექმნილი ფაილების შემოწმება",
+    "MANIFEST": "მანიფესტის შექმნა",
+    "PUBLISH": "გამოქვეყნება",
+    "DONE": "დასრულდა",
+}
+EX_PROGRESS: Final = "{phase}: {done} / {total}"
+EX_DONE: Final = "✓ ექსპორტი დასრულდა და შემოწმდა: {count} კითხვა, {files} ფაილი — {folder}"
+EX_FAILED: Final = "✗ ექსპორტი ვერ დასრულდა — არაფერი გამოქვეყნებულა. {detail}"
+EX_CANCELLED: Final = "ექსპორტი შეწყდა — არაფერი გამოქვეყნებულა."
+EX_ERR_VERIFY: Final = "შექმნილი ფაილი შემოწმებას ვერ გადის: {detail}"
+EX_ERR_STORAGE: Final = "ჩაწერა ვერ მოხერხდა: {detail}"
+EX_ERR_OTHER: Final = "მოულოდნელი შეცდომა: {detail}"
+EX_CLOSE_TITLE: Final = "ექსპორტი მიმდინარეობს"
+EX_CLOSE_TEXT: Final = (
+    "ექსპორტი ჯერ არ დასრულებულა. შევწყვიტოთ და დავხუროთ პროგრამა? დაუსრულებელი ფაილები "
+    "წაიშლება, წინა ექსპორტები უცვლელი დარჩება."
+)
+EX_CLOSE_STOP: Final = "შეწყვეტა და დახურვა"
+EX_CLOSE_WAIT: Final = "გაგრძელება"
+ACTION_EXPORT: Final = "დამტკიცებული კითხვების ექსპორტი…"

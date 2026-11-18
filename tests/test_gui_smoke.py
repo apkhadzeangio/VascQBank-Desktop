@@ -76,12 +76,13 @@ def test_window_title_is_georgian(window) -> None:
 
 def test_sidebar_navigation_has_working_home_page(window) -> None:
     nav = window.sidebar.nav_list
-    # Phase 3 adds the catalog, backups and reviewer pages next to the home page.
+    # Phase 3 adds the catalog, backups and reviewer pages next to the home page; Phase 6 the export.
     assert [nav.item(i).text() for i in range(nav.count())] == [
         strings.NAV_HOME,
         strings.NAV_CATALOG,
         strings.NAV_BACKUPS,
         strings.NAV_REVIEWER,
+        strings.NAV_EXPORT,
     ]
     assert nav.currentItem().text() == strings.NAV_HOME
     assert window.pages.currentWidget() is window.welcome_view

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vascqbank-desktop"
-version = "0.5.0"
+version = "0.6.0"
 description = "VascQBank Review Desktop — offline desktop application for reviewing and approving Georgian vascular surgery exam questions"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -23,6 +23,8 @@ classifiers = [
 # this application never uses, which roughly triples the packaged size.
 dependencies = [
     "PySide6-Essentials>=6.7,<7",
+    # Word export (Phase 6); pure Python + lxml, works offline
+    "python-docx>=1.1,<2",
 ]
 
 [project.optional-dependencies]

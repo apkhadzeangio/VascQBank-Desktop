@@ -1,6 +1,6 @@
 # VascQBank Review Desktop — Architecture
 
-This document describes the architecture implemented in Phases 1–5 and the design
+This document describes the architecture implemented in Phases 1–6 and the design
 that later phases implement. Sections marked **(implemented)** describe code
 that exists and is tested; sections marked **(design)** are the plan.
 
@@ -45,9 +45,9 @@ that exists and is tested; sections marked **(design)** are the plan.
 | `config` | constants, cross-platform paths | Qt, sqlite3, any upper layer |
 | `domain` | subjects, answer letters ა–ე, review statuses, the editorial workflow state machine, question IDs, edit validation, word-level text diff | Qt, sqlite3, db, services, ui, app, importexport |
 | `validation` | text normalisation; later structural question checks | Qt, sqlite3, upper layers |
-| `importexport` | strict UTF-8 I/O; later TXT/master parsers, TXT/DOCX writers | Qt, ui, app |
+| `importexport` | strict UTF-8 I/O; TXT/master parsers; paired-TXT and Word (.docx) writers and the .docx verifier | Qt, ui, app |
 | `db` | connection policy, ownership check, migrations, repositories (questions, catalog, drafts, edits, review decisions, approved text) | Qt, services, ui, app |
-| `services` | use cases (storage init, import, catalog/search, settings, session, backups, drafts, edits, **review decisions, approved-text contract**; later export) | Qt, ui, app |
+| `services` | use cases (storage init, import, catalog/search, settings, session, backups, drafts, edits, review decisions, approved-text contract, **export**) | Qt, ui, app |
 | `ui` | widgets, Georgian strings, fonts, theme | sqlite3, db, app |
 | `app` | entry point and composition root | — |
 
@@ -253,6 +253,27 @@ Medians of repeated runs; two complete runs agreed within ≈15 %.
 Query-plan tests assert index-ordered listing without a temporary sort, primary-key-only
 lookups for a page and for a detail, and that a page of 100 rows costs exactly one
 `SELECT` and reads no revision history (no N+1 pattern).
+
+### Phase 6 — export of 10,000 approved questions (measured)
+
+`tests/test_export_performance.py`: the synthetic 10,000-question bank, every question approved by
+test set-up; Linux, Python 3.13, python-docx 1.2, tmpfs-class disk.
+
+| Operation | Measured | Test budget |
+|---|---:|---:|
+| TXT export of all 10,000 (snapshot 0.18 · write 0.06 · parse-back verification 0.41 · manifest 0.03 s) | 0.75 s | < 60 s |
+| One Word document with all 10,000 questions, review edition: build · save (ZIP) | 9.5 · 0.1 s | < 120 · 60 s |
+| Complete export: three Word editions of 10,000 + all TXT, including verification of every file | 23 s (Word 18.5, verification 4.2) | < 600 s |
+| Process peak memory: before → one 10,000-question document → complete export | 119 → 258 → 376 MB | — |
+| File sizes: TXT · manifest · review / exam / answer-key .docx | 9.5 · 3.0 · 0.4 / 0.3 / 0.2 MB | — |
+| Window responsiveness during a 10,000-question Word export (event-loop gap p95 / worst) | 64 / 217 ms | worst < 1.5 s |
+
+The synthetic text is highly repetitive, so the .docx files compress far better than real questions
+will (expect several MB for a full bank); the timings do not depend on that. python-docx's own
+`add_paragraph` and style setter made a 2,000-question document take 21 s (quadratic); the writer
+inserts paragraphs before the remembered `w:sectPr` and writes style ids directly, which made it
+linear (≈ 1 ms per question). The worker runs in the background (`QThreadPool`); the window stays
+usable, with occasional pauses of up to a fifth of a second while Python code competes for the GIL.
 
 ### Phase 5 — review decisions on 10,000 questions (measured)
 
@@ -464,7 +485,7 @@ than 24 h, and **restore**: validate
 the chosen backup → safety backup of the current database → close
 connections → atomic replace → remove stale `-wal`/`-shm` → reopen and migrate.
 
-## 11. Word and TXT export (design)
+## 11. Word and TXT export (implemented — Phase 6, details in §22)
 
 * **Scope**: approved questions only (all subjects or a selection), using the
   approved revision's content.
@@ -473,16 +494,17 @@ connections → atomic replace → remove stale `-wal`/`-shm` → reopen and mig
   UTF-8 without BOM, LF by default (CRLF optional). **Round-trip guarantee**:
   every exported pair re-imports through the same parser to identical content
   (automated test).
-* **Word (.docx)** via `python-docx` (added as a dependency in that phase):
-  heading per subject, numbered questions with options ა)–ე), correct-answer
-  modes (answer key at the end / marked inline / questions only), explanations
-  section, page numbers, A4. Georgian font set on all `w:rFonts` slots;
-  default **Sylfaen** (installed on every Windows), Noto Sans Georgian optional.
-  After writing, the document is reopened and its question count verified.
-* Files are written atomically (implemented now: `write_utf8_text_atomic`);
-  names like `VascQBank_ALI_approved_20261117-2120.docx`; a JSON manifest
-  (question uids, revision ids, hashes, database_id) is written beside them
-  and logged in `export_runs`.
+* **Word (.docx)** via `python-docx`: heading per subject, numbered questions with options
+  ა)–ე), three editions (review: answers marked inline + explanations; exam: questions only;
+  answer key), page numbers, A4. One font on all four `w:rFonts` slots; default **Sylfaen**
+  (installed on every Windows), DejaVu Sans as the alternative. *Noto Sans Georgian was tried and
+  rejected*: it has no Latin letters or digits, so mixed text (EVAR, mmHg, 70 %) rendered badly.
+  After writing, every document is reopened and compared with the snapshot question by question.
+* Files are staged, verified, then published as one folder `VascQBank_Export_<time>-<id>/` with
+  `DOCX/<CODE>_<edition>.docx`, `DOCX/VascQBank_All_Approved_<edition>.docx`, `TXT/<CODE>_questions.txt`,
+  `TXT/<CODE>_explanations.txt` and `export-manifest.json` (question uids, approved revision ids,
+  content hashes, snapshot fingerprint, database id, every file's SHA-256); each successful export is
+  recorded in `export_runs`.
 
 ## 12. Georgian text and fonts (implemented)
 
@@ -545,7 +567,11 @@ connections → atomic replace → remove stale `-wal`/`-shm` → reopen and mig
 | Workflow UI: bar, approve-and-next, filtered navigation, dialogs, shortcuts, statistics, restart | pytest-qt, offscreen | implemented |
 | Export contract (approved revision only, ordering, fingerprint, corruption detection) | pytest | implemented |
 | 10,000-question review benchmark | `perf` marker | implemented |
-| Round-trip export | pytest | Phase 6 |
+| TXT writer, representability rules; Word writer, fonts, editions; .docx verifier against tampering | pytest | implemented |
+| Export service: plan, snapshot consistency under concurrent edits, manifest, atomic publication, disk-full, permissions, cancellation, rename/commit failures, stale staging | pytest with temp folders | implemented |
+| TXT round trip through the real importer (fixed and randomised banks, gaps, partial selections) | pytest | implemented |
+| Export page: preview, background export, progress, cancel, errors, closing the window | pytest-qt, offscreen | implemented |
+| 10,000-question export: time, size, memory, verification, GUI responsiveness | `perf` marker | implemented |
 | Packaged builds | CI smoke run of the EXE/AppImage | packaging phase |
 
 Offscreen GUI tests verify widget structure and wiring; they are not a
@@ -1018,7 +1044,7 @@ dialogs, conflicts, Georgian messages, shortcuts, statistics, restart); the expo
 10,000-question benchmark (§6). Several tests were run against deliberately broken code to
 prove they can fail.
 
-## 19. The export contract for Phase 6 (read side implemented — Phase 5)
+## 19. The export contract (read side implemented in Phase 5, used by the exporter of Phase 6)
 
 The Phase 6 exporter gets its data **only** from `services/approved_service.ApprovedQuestionsService`
 (`db/approved_repository.py`, read-only SELECTs — tested to contain no write keyword):
@@ -1056,13 +1082,136 @@ current can never be approved). Phase 6 must not add another path to question te
 * The physical-disk and power-loss caveats of §17.3 apply unchanged: committed decisions are
   durable (`synchronous=FULL`); nothing protects against disk failure.
 
-## 21. Extension points for Phase 6 (export)
+## 21. Remaining risks (Phase 6)
 
-* Read through `ApprovedQuestionsService.snapshot()` (§19); run `verify()` first; record
-  `fingerprint`, `uid`s and `revision_id`s in the manifest and in `export_runs`; write files with
-  the existing atomic writer.
-* The **round-trip test** of §11 can seed a bank, approve questions through `ReviewService`, export,
-  re-import into a fresh database and compare content.
-* **Invariants to keep**: catalog and approved repositories stay read-only; the UI never imports
-  `db`; every write is a single transaction; "done" is shown only after the commit; drafts are never
-  deleted implicitly and never exported.
+* **Rendering is not verified pixel by pixel.** The verifier proves the OOXML structure and every
+  character; how Word paginates depends on the installed fonts and Word version. A sample rendered
+  with LibreOffice (`docs/samples/phase6/rendered/`) looked as intended; nobody has checked it in
+  Microsoft Word in this environment.
+* **Fonts are named, not embedded.** A computer without Sylfaen (or DejaVu Sans) substitutes another
+  face; Georgian stays correct only if the substitute covers Georgian.
+* **TXT cannot carry every text**: blank lines inside a field, `*` in a question or option, lines that
+  look like options/numbers, or edge spaces are refused with the question named (§22.5) — the text must
+  be corrected and re-approved. Word has no such limit.
+* Large exports hold the whole document in memory (≈ 140 MB per 10,000-question document).
+* Exports are files the reviewer then copies or shares; the application cannot protect them afterwards.
+
+## 22. The export engine (implemented — Phase 6)
+
+### 22.1 Layers
+
+```
+ui/export_view.py           ExportView            choices, preview, progress, cancel, messages
+        │ (BackgroundJob / LatestOnlyRunner — the QThreadPool workers of §15.3)
+services/export_service.py  ExportService         plan → snapshot → write → verify → manifest → publish
+        │                          │
+importexport/txt_export.py   docx_export.py   docx_verify.py   paired_txt.py (the importer, for read-back)
+services/approved_service.py  (the ONLY source of question text, §19)
+db/export_repository.py       record_and_publish(): export_runs rows + folder rename in one transaction
+```
+
+### 22.2 Workflow and guarantees
+
+1. **Snapshot**: `ApprovedQuestionsService.snapshot()` (one read transaction) and `verify()`; a
+   violation blocks the export. Only the questions of the selected subjects are kept; the fingerprint
+   is recomputed for exactly that selection. Edits committed while the export runs cannot reach it
+   (tested by committing an edit from inside the writer).
+2. **Plan** (also the page's preview): per subject total/approved/excluded counts, the files that will
+   be written, TXT representability problems. Nothing approved → `ExportEmpty` (no empty document).
+3. **Staging**: `<destination>/.vqb-export-<id>.partial/` carrying a marker file. An abandoned staging
+   folder from a crashed export is removed on the next export **only if it carries the marker** —
+   user files and look-alike folders are never touched.
+4. **Writing**: TXT per subject; Word per edition, per subject and/or one combined document.
+5. **Verification** of every file (§22.4); any problem → `ExportVerificationFailed`, nothing published.
+6. **Manifest** `export-manifest.json`: export id, app version, time, database id, snapshot time and
+   fingerprint, selection (subjects, formats, editions, layout, font), counts (exported / excluded per
+   subject), every question's uid, subject, source number, approved revision id and number, content
+   hash and approval time, and every file's path, kind, size and SHA-256.
+7. **Publication**: one `BEGIN IMMEDIATE` inserts the `export_runs` rows (one per format), renames the
+   staging folder to `VascQBank_Export_<yyyymmdd-HHMMSS>-<random>/` and commits. A rename failure rolls
+   the rows back; a commit failure renames the folder back — so a recorded export always exists and a
+   folder never appears unrecorded. An existing folder is never overwritten.
+8. Any failure, cancellation or crash before step 7 leaves no export folder and no row; the staging
+   folder is removed; earlier exports are untouched (tested with disk-full, permission, verification,
+   rename and commit failures). Nothing in the database other than `export_runs` is written.
+
+### 22.3 Output modes and numbering
+
+| Edition | Content |
+|---|---|
+| Review (default) | ID, question, five options with the correct one in its own style **and** „✓ სწორი პასუხი“, explanation |
+| Exam | ID, question, five options in one identical style — no marker, no explanation, no answer anywhere in the package |
+| Answer key | `12. ALI-0042 — ბ) <correct option>` and the explanation, numbered exactly like the exam edition |
+
+* **Numbering**: Word shows a continuous display number (1 … N in export order) *followed by the
+  immutable question ID* — `12. ALI-0042`; exam and answer key of one export share the numbers. TXT keeps
+  the **original source number** (`42.`) and subject code; a partial export has gaps, which the importer
+  accepts. No question is ever renumbered in its identity.
+* **Layout**: A4, 2 / 2.2 cm margins, header with the document title, footer `გვერდი PAGE / NUMPAGES`
+  (real fields), reusable paragraph styles (`VQB Title`, `VQB Meta`, `VQB Subject` based on Heading 1,
+  `VQB Question ID`, `VQB Stem`, `VQB Option`, `VQB Option Correct`, `VQB Explanation Label`,
+  `VQB Explanation`, `VQB Key Entry`) and one character style (`VQB Correct Marker`). Each subject starts
+  on a new page; questions never get page breaks of their own, but ID, question and options are kept
+  together (`keep with next`, `keep lines together`). Line breaks inside a field are Word line breaks.
+* **Fonts**: one family on `ascii`, `hAnsi`, `cs` and `eastAsia` of the document defaults and every style,
+  theme fonts removed, language `ka-GE`. See §11 for the font choice.
+* The front matter states that the document was produced from approved revisions and is **not an
+  officially accredited or certified examination**.
+
+### 22.4 Verification
+
+* **Word**: reopened with python-docx; A4 and the page-number field checked; every VascQBank style must
+  name the chosen font in all four slots; the body paragraphs are walked **by style** and every question
+  is rebuilt (display number, uid, subject, stem, five options in ა…ე order, which option carries the
+  correct style and marker, explanation or key entry) and compared character for character with the
+  snapshot — missing, extra, duplicated or reordered questions are reported. The exam edition must have
+  no correct style, no marker run, no explanation, no key entry, no direct run formatting on any option,
+  and the marker text must appear nowhere in the package. The tests tamper with real files (an option, an
+  ID, an explanation, a symbol, a style, the key, a duplicate) and the verifier catches each.
+* **TXT**: no BOM, LF only; parsed back with the **real importer** (`parse_pair`); no error allowed;
+  exactly the expected IDs; every question equal to the snapshot field by field.
+
+### 22.5 The TXT format and what it cannot carry
+
+The paired-TXT convention (§7.2) has no escape mechanism. Before writing, `txt_problems()` names texts
+that would not read back identically — a blank line inside a field (it ends the question), `*` in a
+question or option (the answer marker), a continuation line that looks like `ბ) …` (an option) or, in an
+option, like `12. …` (a new question), spaces at a line edge that the reader trims, an explanation that
+starts with `*`. A TXT export containing such a text is refused with the question IDs and fields; the
+text is **never altered to make the format fit**. The read-back verification is the final proof.
+
+### 22.6 Round-trip guarantee
+
+`tests/test_export_roundtrip.py`: synthetic bank → edits (multi-line, Georgian, EVAR/CTA/≥/α/10⁹) →
+approval through `ReviewService` → TXT export → import into a fresh database with the normal import
+service → every approved question identical (ID, question, five options, correct letter, explanation),
+nothing unapproved present, gaps preserved; fixed bank, single-subject partial export and three
+randomised banks with gaps in three subjects; the answer key of the same export agrees with the TXT.
+
+### 22.7 The export page
+
+Subjects (all / none / any combination), formats, editions, per-subject and/or combined Word files,
+font, destination folder (default `<data>/exports`). The preview shows the selected subjects, how many
+questions will be exported and how many are excluded because they are not approved, the editions, the
+destination and every file name; empty or blocked selections disable the button and say why. The export
+runs on a worker with phase, progress and count; **Cancel** stops before publication; success is shown
+only after verification and publication. Closing the window during an export asks whether to stop it
+(the worker removes its staging folder before the window closes) or to keep working.
+
+## 23. Phase 7 handoff — bundled seed database distribution
+
+* The seed must be built through the **same import pipeline** (§16); the export engine now offers a
+  second check: build the seed, approve nothing, and confirm `ApprovedQuestionsService.snapshot()` is
+  empty and `verify()` is clean — a seed must never contain approvals.
+* `export_runs` is append-only and belongs to the user's database: a seed ships with an **empty**
+  `export_runs`, `drafts` and `draft_discards`; a seed-acceptance test should assert that.
+* The export manifest carries `database_id`; once seeds exist, add `seed_database_id`/`seed_version`
+  from `app_metadata` to the manifest so an export can be traced to the seed it started from.
+* `python-docx` (and its `lxml`) must be included by the packager (PyInstaller hidden imports / data:
+  python-docx ships its default template `docx/templates/default.docx`) — test an export from the frozen
+  build, not only from source.
+* Fonts: Sylfaen is present on Windows; for the Linux AppImage consider shipping DejaVu Sans or checking
+  for it at export time and offering the alternative.
+* **Invariants to keep**: catalog and approved repositories stay read-only; the exporter reads question
+  text only through `ApprovedQuestionsService`; every write is a single transaction; "done" is shown
+  only after the commit; drafts are never deleted implicitly and never exported.

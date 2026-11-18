@@ -6,22 +6,18 @@ Offline desktop application for reviewing, editing and approving the
 The final deliverable of the review process is a set of **approved Word (.docx)
 and TXT files**.
 
-* Python 3.12+ · PySide6 (Qt 6) · SQLite — Windows 10/11 and Linux (incl. CachyOS)
+* Python 3.12+ · PySide6 (Qt 6) · SQLite · python-docx — Windows 10/11 and Linux (incl. CachyOS)
 * Entirely offline: no server, no cloud database, no login, no synchronisation.
   Each installation keeps its own local database.
 * The application **never generates questions**; it only works with imported ones.
 * The user interface is Georgian; code and technical documentation are English.
 
-> **Status: Phase 5 of 10 — approval, rejection, reopening and revision
-> restoration.** Working: importing questions (Phase 2); browsing all 12 subjects,
-> full-text search, progress statistics, a local reviewer profile, session restore
-> and verified backups (Phase 3); editing every part of a question with autosaved
-> drafts, explicit saves, conflict detection, revision history and crash recovery
-> (Phase 4); and now the **complete editorial workflow**: **approve** the exact saved
-> revision (also *approve and next*), **reject** with a mandatory reason, **reopen**,
-> **restore an earlier revision** as a new one, live statistics, and a read-only
-> **export contract** for the Phase 6 DOCX/TXT exporter, which is the next phase
-> (see [ARCHITECTURE.md](ARCHITECTURE.md)).
+> **Status: Phase 6 of 10 — DOCX/TXT export engine.** Working: import (Phase 2); browsing,
+> search, statistics, reviewer profile, sessions and backups (Phase 3); the editor with autosaved
+> drafts and crash recovery (Phase 4); approval, rejection, reopening and revision restoration
+> (Phase 5); and now the **final deliverable**: verified **Word (.docx)** documents — review, exam
+> and answer-key editions — and **paired TXT** files of the approved questions, with a manifest,
+> atomic publication and a proven TXT round trip (see [ARCHITECTURE.md](ARCHITECTURE.md) §22).
 
 ---
 
@@ -165,13 +161,53 @@ Each question shows only the actions its status allows:
   `ApprovedQuestionsService`; drafts, pending, in-review, rejected questions and superseded
   revisions can never be exported (ARCHITECTURE.md §19). There is no bulk approval.
 
+## Exporting approved questions (Phase 6)
+
+**ექსპორტი** in the sidebar (or **ფაილი → დამტკიცებული კითხვების ექსპორტი…**, Ctrl+Shift+E):
+
+1. choose subjects (all, one or several), **Word (.docx)** and/or **TXT**, the Word edition(s) —
+   *განხილვის ვერსია* (answers marked, explanations; default), *საგამოცდო ვერსია* (no answers),
+   *პასუხების გასაღები* (answers + explanations) — one file per subject and/or one combined file, the
+   font (Sylfaen by default, DejaVu Sans) and the destination folder;
+2. the preview lists the subjects, how many approved questions will be exported, how many are left out
+   because they are not approved, and every file name;
+3. **ექსპორტი** runs in the background with progress and a cancel button.
+
+```
+<destination>/VascQBank_Export_20261118-091502-7a0ebb/
+  DOCX/ALI_review.docx  …  DOCX/VascQBank_All_Approved_exam.docx  DOCX/…_answer_key.docx
+  TXT/ALI_questions.txt  TXT/ALI_explanations.txt  …
+  export-manifest.json
+```
+
+* Only the **exact approved revision** of **approved** questions is exported — never drafts,
+  pending, in-review or rejected questions, never an older or newer revision. Nothing in the
+  database changes; the export is recorded in `export_runs`.
+* Every file is checked before it is published: each Word document is reopened and compared with the
+  approved text question by question (and the exam edition is proven not to reveal answers); each TXT
+  pair is read back with the real importer. A failed, cancelled or interrupted export publishes nothing
+  and never touches earlier exports; a new export never overwrites an old folder.
+* **Numbering**: Word shows `12. ALI-0042` — a running number for the document and the permanent
+  question ID; the exam and its answer key share the numbers. TXT keeps the original numbers, so a
+  partial export has gaps (the importer accepts them).
+* **TXT limits**: the TXT format cannot hold a blank line inside a field, `*` in a question or option,
+  or lines that look like `ბ) …`. Such questions are named in the preview and the TXT export is refused
+  until the text is corrected and re-approved (Word is not affected).
+* Fonts are named, not embedded: use Sylfaen on Windows; on Linux/LibreOffice choose DejaVu Sans.
+
+Synthetic sample output (artificial questions): `python tools/make_export_samples.py OUT_DIR` writes a
+complete verified export. Generated `.docx`/TXT files are deliberately kept out of git by `.gitignore`
+(the same rule that protects real question files); the sample's manifest and page images rendered by
+LibreOffice are in [docs/samples/phase6](docs/samples/phase6).
+
 ### Screenshots
 
 Rendered from the real window with **synthetic** data (10,000 artificial questions) by
 `tools/capture_screenshots.py`, `tools/capture_screenshots_phase4.py` and
-`tools/capture_screenshots_phase5.py`; see [docs/screenshots/phase3](docs/screenshots/phase3),
-[docs/screenshots/phase4](docs/screenshots/phase4) and
-[docs/screenshots/phase5](docs/screenshots/phase5) (workflow bar, approve, approve-and-next in a
+`tools/capture_screenshots_phase5.py` and `tools/capture_screenshots_phase6.py`; see
+[docs/screenshots/phase3](docs/screenshots/phase3), [docs/screenshots/phase4](docs/screenshots/phase4),
+[docs/screenshots/phase5](docs/screenshots/phase5) and [docs/screenshots/phase6](docs/screenshots/phase6)
+(the export page, its options, a blocked TXT export, progress and completion) (workflow bar, approve, approve-and-next in a
 filter, reject and reopen dialogs, restore with a draft, the restored history): home dashboard, catalog with the correct
 answer highlighted, search results, backups, the reviewer profile, and (Phase 4) the editor,
 validation, the approved-question warning, a conflict, draft recovery, the draft list and the
@@ -238,12 +274,12 @@ src/vascqbank_desktop/
 ├── config/        constants and cross-platform paths
 ├── domain/        subjects, answer letters, statuses, question IDs, ImportedQuestion
 ├── db/            SQLite policy, ownership check, migrations (schema v2, v3), backups, repositories, search index
-├── services/      use cases: storage init, import, counts, catalog/search, settings, session, backups, drafts, edits, review decisions, approved-text contract
+├── services/      use cases: storage init, import, counts, catalog/search, settings, session, backups, drafts, edits, review decisions, approved-text contract, export
 ├── validation/    text normalisation, issue catalogue (Georgian), content rules
-├── importexport/  file discovery, paired-TXT and refined-master parsers, UTF-8 I/O
-├── ui/            PySide6 widgets: catalog, detail, editor, autosave, workflow, history, drafts, backups, reviewer, import; strings, theme, workers
+├── importexport/  file discovery, paired-TXT and refined-master parsers, UTF-8 I/O, TXT and Word writers, Word verifier
+├── ui/            PySide6 widgets: catalog, detail, editor, autosave, workflow, history, drafts, export, backups, reviewer, import; strings, theme, workers
 └── resources/     bundled fonts (Noto Sans, Noto Sans Georgian) and icon
-tools/             capture_screenshots*.py — render the real window with synthetic data
+tools/             capture_screenshots*.py — render the real window; make_export_samples.py — sample export (synthetic data)
 tests/             pytest suite, incl. layer-boundary, offline, crash-recovery (isolated SIGKILL children on temporary databases) and 10,000-question checks
 ```
 

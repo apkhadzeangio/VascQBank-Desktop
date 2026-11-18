@@ -23,6 +23,7 @@ from vascqbank_desktop.domain.subjects import Subject
 from vascqbank_desktop.services.catalog_service import CatalogService, SearchIndexStatus
 from vascqbank_desktop.services.draft_service import DraftService
 from vascqbank_desktop.services.edit_service import EditService
+from vascqbank_desktop.services.export_service import ExportService
 from vascqbank_desktop.services.question_stats import BankCounts, bank_counts, summarize
 from vascqbank_desktop.services.review_service import ReviewService
 from vascqbank_desktop.services.session_service import restore_context
@@ -33,11 +34,13 @@ from vascqbank_desktop.ui.autosave import DEFAULT_DELAY_MS
 from vascqbank_desktop.ui.backup_view import BackupView
 from vascqbank_desktop.ui.catalog_editing import EditingServices
 from vascqbank_desktop.ui.catalog_view import CatalogView
+from vascqbank_desktop.ui.export_view import ExportView
 from vascqbank_desktop.ui.import_dialog import ImportDialog
 from vascqbank_desktop.ui.reviewer_view import ReviewerView
 from vascqbank_desktop.ui.sidebar import (
     PAGE_BACKUPS,
     PAGE_CATALOG,
+    PAGE_EXPORT,
     PAGE_HOME,
     PAGE_REVIEWER,
     Sidebar,
@@ -105,11 +108,14 @@ class MainWindow(QMainWindow):
             autosave_delay_ms=autosave_delay_ms,
         )
         self.backup_view = BackupView(self._paths)
+        self.export_service = ExportService(self._paths)
+        self.export_view = ExportView(self.export_service, subjects)
         self.reviewer_view = ReviewerView(self.reviewer_profile)
         self._add_page(PAGE_HOME, self.welcome_view)
         self._add_page(PAGE_CATALOG, self.catalog_view)
         self._add_page(PAGE_BACKUPS, self.backup_view)
         self._add_page(PAGE_REVIEWER, self.reviewer_view)
+        self._add_page(PAGE_EXPORT, self.export_view)
 
         root.addWidget(self.sidebar)
         root.addWidget(self.pages, 1)
@@ -194,6 +200,8 @@ class MainWindow(QMainWindow):
         self.sidebar.select_page(key)
         if key == PAGE_BACKUPS:
             self.backup_view.refresh()
+        elif key == PAGE_EXPORT:
+            self.export_view.request_preview()  # approvals may have changed since it was last shown
         elif key == PAGE_REVIEWER:
             self.reviewer_view.refresh()
 
@@ -295,6 +303,10 @@ class MainWindow(QMainWindow):
         self.action_open_data_dir = QAction(strings.ACTION_OPEN_DATA_DIR, self)
         self.action_open_data_dir.triggered.connect(self._open_data_dir)
         file_menu.addAction(self.action_open_data_dir)
+        self.action_export = QAction(strings.ACTION_EXPORT, self)
+        self.action_export.setShortcut(QKeySequence("Ctrl+Shift+E"))
+        self.action_export.triggered.connect(lambda: self.show_page(PAGE_EXPORT))
+        file_menu.addAction(self.action_export)
         file_menu.addSeparator()
 
         self.action_quit = QAction(strings.ACTION_QUIT, self)
@@ -385,6 +397,9 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         # The draft is written (and confirmed) before anything else; if that is impossible and the
         # reviewer keeps the text, the window stays open.
+        if not self.export_view.prepare_close():  # a running export: stop it, or keep the window open
+            event.ignore()
+            return
         if not self.catalog_view.prepare_shutdown():
             event.ignore()
             return
@@ -395,5 +410,6 @@ class MainWindow(QMainWindow):
             log.warning("Could not save the window geometry: %s", exc)
         self.catalog_view.shutdown()
         self.backup_view.shutdown()
+        self.export_view.shutdown()
         self.wait_for_background_work()
         super().closeEvent(event)

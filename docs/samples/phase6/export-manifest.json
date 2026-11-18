@@ -1,0 +1,145 @@
+{
+  "manifest_version": 1,
+  "export_id": "20261118-090518-492618",
+  "application": "VascQBank Review Desktop",
+  "app_version": "0.6.0",
+  "exported_at": "2026-11-18T09:05:18+00:00",
+  "database_id": "a94f3c4c-7989-44b3-8db1-3469a6054ecf",
+  "snapshot": {
+    "taken_at": "2026-11-18T09:05:18+00:00",
+    "fingerprint": "7d7f295087aa550042f11f10c94cca4ef6ace4b67d503933225dcd1081c2f9b2"
+  },
+  "selection": {
+    "subjects": [
+      "ALI",
+      "VENOUS"
+    ],
+    "formats": [
+      "DOCX",
+      "TXT"
+    ],
+    "docx_editions": [
+      "review",
+      "exam",
+      "answer_key"
+    ],
+    "docx_per_subject": false,
+    "docx_combined": true,
+    "font": "Sylfaen"
+  },
+  "counts": {
+    "approved_exported": 6,
+    "excluded_not_approved": 5,
+    "by_subject": {
+      "ALI": {
+        "total": 8,
+        "approved": 4
+      },
+      "VENOUS": {
+        "total": 3,
+        "approved": 2
+      }
+    }
+  },
+  "numbering": "TXT keeps the original source numbers (gaps are expected in partial exports); Word shows a continuous display number followed by the immutable question ID",
+  "questions": [
+    {
+      "uid": "ALI-0001",
+      "subject": "ALI",
+      "source_number": 1,
+      "approved_revision_id": 1,
+      "revision_no": 1,
+      "content_hash": "1aec01008c278f75a7b92d30f8aa1f4aca083fa2cbe0795550d966262caa5bed",
+      "approved_at": "2026-11-18T09:05:18+00:00"
+    },
+    {
+      "uid": "ALI-0003",
+      "subject": "ALI",
+      "source_number": 3,
+      "approved_revision_id": 12,
+      "revision_no": 2,
+      "content_hash": "8cdd561047f7beb81dc07d79afdcfa01a1d1ca43627d2b23f9a1d53b09f80dc5",
+      "approved_at": "2026-11-18T09:05:18+00:00"
+    },
+    {
+      "uid": "ALI-0008",
+      "subject": "ALI",
+      "source_number": 8,
+      "approved_revision_id": 5,
+      "revision_no": 1,
+      "content_hash": "b50b66243e5cfbc422e32d1cf2fdc17a4ffba78da6e2fa7387f1eaa4302eb2db",
+      "approved_at": "2026-11-18T09:05:18+00:00"
+    },
+    {
+      "uid": "ALI-0021",
+      "subject": "ALI",
+      "source_number": 21,
+      "approved_revision_id": 7,
+      "revision_no": 1,
+      "content_hash": "75d54d08e0562dd4b24b99ea4d4fd0c583731b8946f77c2fa5e18c2ad98fe2d0",
+      "approved_at": "2026-11-18T09:05:18+00:00"
+    },
+    {
+      "uid": "VENOUS-0007",
+      "subject": "VENOUS",
+      "source_number": 7,
+      "approved_revision_id": 10,
+      "revision_no": 1,
+      "content_hash": "5f99468a8b418caf53f6a662eb77d6d5425e1d8a8b6535d5532919d91980fb68",
+      "approved_at": "2026-11-18T09:05:18+00:00"
+    },
+    {
+      "uid": "VENOUS-0010",
+      "subject": "VENOUS",
+      "source_number": 10,
+      "approved_revision_id": 11,
+      "revision_no": 1,
+      "content_hash": "019ea683166aee84325471cbd89194d675698e747e49150dba745939f1219f08",
+      "approved_at": "2026-11-18T09:05:18+00:00"
+    }
+  ],
+  "files": [
+    {
+      "path": "TXT/ALI_questions.txt",
+      "kind": "TXT",
+      "size": 2440,
+      "sha256": "803bc7a0d4232b79cdccadfef73ae76e8089fc00ecaf4225004ca472ab63b2ff"
+    },
+    {
+      "path": "TXT/ALI_explanations.txt",
+      "kind": "TXT",
+      "size": 412,
+      "sha256": "215a65897d66b16cc0ea12125781f93a8469ec9792778076e5df2ce0b024d728"
+    },
+    {
+      "path": "TXT/VENOUS_questions.txt",
+      "kind": "TXT",
+      "size": 1188,
+      "sha256": "cc5c9efb450cdf4cf1f86e65f1f94ac2d1631a5928fb33bab7990cd304f388d7"
+    },
+    {
+      "path": "TXT/VENOUS_explanations.txt",
+      "kind": "TXT",
+      "size": 183,
+      "sha256": "267bd52ae1bd6b4612ca03812c3a235d2c926c8ccbc2b5c8f5ba5a4af420b8ab"
+    },
+    {
+      "path": "DOCX/VascQBank_All_Approved_review.docx",
+      "kind": "DOCX",
+      "size": 39998,
+      "sha256": "31671fffc96d3056ebbb7b453e1178e5744a48155e575d7461500e3d18f4af7c"
+    },
+    {
+      "path": "DOCX/VascQBank_All_Approved_exam.docx",
+      "kind": "DOCX",
+      "size": 39803,
+      "sha256": "4afe98d0074c61769ec2aa7a488b69d122ca03ee186402ce18bc222531922ee7"
+    },
+    {
+      "path": "DOCX/VascQBank_All_Approved_answer_key.docx",
+      "kind": "DOCX",
+      "size": 39409,
+      "sha256": "c020626d5e27571b4ca6bbe22c9e74ca5d801553b8a1246d8df231531ed5d76a"
+    }
+  ]
+}

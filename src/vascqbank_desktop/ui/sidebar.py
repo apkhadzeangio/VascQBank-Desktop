@@ -29,11 +29,13 @@ PAGE_HOME = "home"
 PAGE_CATALOG = "catalog"
 PAGE_BACKUPS = "backups"
 PAGE_REVIEWER = "reviewer"
+PAGE_EXPORT = "export"
 _PAGES: tuple[tuple[str, str], ...] = (
     (PAGE_HOME, strings.NAV_HOME),
     (PAGE_CATALOG, strings.NAV_CATALOG),
     (PAGE_BACKUPS, strings.NAV_BACKUPS),
     (PAGE_REVIEWER, strings.NAV_REVIEWER),
+    (PAGE_EXPORT, strings.NAV_EXPORT),
 )
 
 

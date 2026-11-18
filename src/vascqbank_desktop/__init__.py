@@ -4,4 +4,4 @@ Offline desktop application for reviewing and approving Georgian-language
 vascular surgery exam questions. See ARCHITECTURE.md for the layer map.
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
