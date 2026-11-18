@@ -15,10 +15,12 @@ Workflow of :meth:`ExportService.run` (every step must succeed before the next s
 5. **Manifest** (``export-manifest.json``): export id, version, time, database id, selection,
    editions, question IDs, approved revision ids, content hashes, snapshot fingerprint, and every
    output file with its SHA-256.
-6. **Publication.** ``export_runs`` rows are inserted and the staging folder is renamed to
-   ``VascQBank_Export_<id>`` in one transaction (:mod:`~vascqbank_desktop.db.export_repository`).
-   An existing folder is never overwritten; a failed export leaves no folder and no row, and
-   earlier exports are untouched.
+6. **Publication.** A durable intent journal is written, then ``export_runs`` rows are inserted,
+   the staging folder is renamed to ``VascQBank_Export_<id>`` and the transaction commits
+   (:mod:`~vascqbank_desktop.db.export_repository`). Rename and commit cannot be one atomic step;
+   an interruption between them is completed or undone by :func:`reconcile` on the next start or
+   export (:mod:`~vascqbank_desktop.services.export_publication`). An existing folder is never
+   overwritten; a failed export leaves no folder and no row; earlier exports are untouched.
 
 Nothing else in the database is written. Cancellation is honoured between questions and files
 until publication starts.
@@ -64,6 +66,7 @@ from vascqbank_desktop.importexport.txt_export import (
     render_questions,
     txt_problems,
 )
+from vascqbank_desktop.services import export_publication
 from vascqbank_desktop.services.approved_service import (
     ApprovedQuestion,
     ApprovedQuestionsService,
@@ -73,6 +76,7 @@ from vascqbank_desktop.services.approved_service import (
 )
 from vascqbank_desktop.services.edit_errors import StorageFailure, StorageProblem
 from vascqbank_desktop.services.question_stats import bank_counts
+from vascqbank_desktop.services.seed_service import SEED_META_KEYS
 from vascqbank_desktop.validation.issues import has_errors
 
 log = logging.getLogger(__name__)
@@ -309,6 +313,7 @@ class ExportService:
         report = progress or (lambda *_args: None)
         timings: dict[str, float] = {}
         started = time.perf_counter()
+        self.reconcile()  # finish any publication an earlier crash interrupted, before a new one
         report(ExportPhase.SNAPSHOT, 0, 1, "")
         plan = self.plan(request)
         timings["snapshot"] = time.perf_counter() - started
@@ -352,13 +357,13 @@ class ExportService:
             report(ExportPhase.PUBLISH, 0, 1, final.name)
             run_ids = self._publish(plan, staging, final, files, manifest, export_id)
         except _Cancelled as exc:
-            self._discard(staging)
+            self._discard(staging, export_id)
             raise ExportCancelled("the export was cancelled; nothing was published") from exc
         except OSError as exc:
-            self._discard(staging)
+            self._discard(staging, export_id)
             raise ExportStorageError(_storage(exc)) from exc
         except BaseException:
-            self._discard(staging)
+            self._discard(staging, export_id)
             raise
         timings["total"] = time.perf_counter() - started
         report(ExportPhase.DONE, 1, 1, final.name)
@@ -508,9 +513,15 @@ class ExportService:
         conn = open_database(self._paths.database_file)
         try:
             conn.execute("PRAGMA query_only = ON")
-            database_id = read_metadata(conn).get("database_id", "")
+            metadata = read_metadata(conn)
         finally:
             conn.close()
+        database_id = metadata.get("database_id", "")
+        seed = (
+            {key: metadata.get(key) for key in SEED_META_KEYS}
+            if metadata.get("seed_database_id")
+            else None  # a database created before Phase 7 or by manual import: no seed
+        )
         manifest = {
             "manifest_version": 1,
             "export_id": export_id,
@@ -518,6 +529,7 @@ class ExportService:
             "app_version": __version__,
             "exported_at": now.replace(microsecond=0).isoformat(),
             "database_id": database_id,
+            "seed": seed,
             "snapshot": {"taken_at": plan.snapshot.taken_at, "fingerprint": plan.snapshot.fingerprint},
             "selection": {
                 "subjects": [s.code for s in plan.subjects],
@@ -595,17 +607,47 @@ class ExportService:
                     created_at=utc_now_iso(),
                 )
             )
+        manifest_sha = next(f.sha256 for f in files if f.kind == "MANIFEST")
+        export_publication.write_journal(
+            self._paths,
+            {
+                "export_id": export_id,
+                "staging": str(staging),
+                "final": str(final),
+                "manifest_sha256": manifest_sha,
+                "rows": [
+                    {
+                        "format": r.format,
+                        "scope": r.scope,
+                        "question_count": r.question_count,
+                        "files": r.files,
+                        "app_version": r.app_version,
+                        "created_at": r.created_at,
+                    }
+                    for r in rows
+                ],
+            },
+        )
+        export_repository._checkpoint("journal-written")
         conn = make_durable(open_database(self._paths.database_file))
         try:
-            return export_repository.record_and_publish(conn, rows, staging, final)
+            ids = export_repository.record_and_publish(conn, rows, staging, final, export_id=export_id)
         finally:
             conn.close()
+        export_publication.remove_journal(export_publication.journal_path(self._paths, export_id))
+        export_repository._checkpoint("journal-removed")
+        return ids
 
-    @staticmethod
-    def _discard(staging: Path) -> None:
-        """Remove our own unfinished staging folder (never anything else)."""
+    def _discard(self, staging: Path, export_id: str | None = None) -> None:
+        """Remove our own unfinished staging folder (never anything else) and its journal entry."""
         if staging.name.startswith(STAGING_PREFIX) and staging.is_dir():
             shutil.rmtree(staging, ignore_errors=True)
+        if export_id is not None:
+            export_publication.remove_journal(export_publication.journal_path(self._paths, export_id))
+
+    def reconcile(self) -> export_publication.ReconcileReport:
+        """Finish or undo publications interrupted by a crash (idempotent; see export_publication)."""
+        return export_publication.reconcile(self._paths)
 
     def runs(self) -> list[dict]:
         conn = open_database(self._paths.database_file)

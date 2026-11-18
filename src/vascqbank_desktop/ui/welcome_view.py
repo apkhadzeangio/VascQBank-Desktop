@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 from vascqbank_desktop.services.question_stats import ProgressSummary
 from vascqbank_desktop.services.storage import StorageStatus
 from vascqbank_desktop.ui import strings
+from vascqbank_desktop.ui.formatting import format_timestamp
 from vascqbank_desktop.ui.progress_panel import ProgressPanel
 
 
@@ -36,6 +37,16 @@ def _label(text: str, object_name: str, *, wrap: bool = True, selectable: bool =
     if selectable:
         label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
     return label
+
+
+def seed_text(status: StorageStatus) -> str:
+    """Where this database's questions came from (bundled seed or manual import)."""
+    if not status.seed_version:
+        return strings.STORAGE_SEED_NONE
+    kind = strings.SEED_KIND_DEVELOPMENT if status.from_development_seed else strings.SEED_KIND_PRODUCTION
+    return strings.STORAGE_SEED_VALUE.format(
+        version=status.seed_version, kind=kind, time=format_timestamp(status.seed_installed_at)
+    )
 
 
 class WelcomeView(QWidget):
@@ -203,6 +214,7 @@ class WelcomeView(QWidget):
                 strings.STORAGE_DATABASE_ID,
                 _label(status.database_id, "FieldValue", wrap=False, selectable=True),
             ),
+            (strings.STORAGE_SEED, _label(seed_text(status), "FieldValue", selectable=True)),
         ]
         for row, (name, value) in enumerate(rows):
             grid.addWidget(

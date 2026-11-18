@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vascqbank-desktop"
-version = "0.6.0"
+version = "0.7.0"
 description = "VascQBank Review Desktop — offline desktop application for reviewing and approving Georgian vascular surgery exam questions"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -40,7 +40,11 @@ vascqbank-desktop = "vascqbank_desktop.app.main:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"vascqbank_desktop.resources" = ["fonts/*.ttf", "fonts/OFL.txt", "icons/*.svg"]
+"vascqbank_desktop.resources" = [
+    "fonts/*.ttf", "fonts/OFL.txt", "icons/*.svg",
+    # a distribution build places the verified seed here (never committed; see seed/README.md)
+    "seed/README.md", "seed/seed-manifest.json", "seed/*.sqlite3",
+]
 
 [tool.ruff]
 line-length = 110

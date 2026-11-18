@@ -19,6 +19,7 @@ import logging
 import sqlite3
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
 from vascqbank_desktop import __version__
 from vascqbank_desktop.app.logging_setup import configure_logging, install_excepthook
@@ -29,13 +30,17 @@ from vascqbank_desktop.config.constants import (
 )
 from vascqbank_desktop.config.paths import AppPaths, resolve_app_paths
 from vascqbank_desktop.db.errors import DatabaseError
-from vascqbank_desktop.services.storage import StorageStatus, initialize_storage
+from vascqbank_desktop.services.seed_service import locate_seed
+from vascqbank_desktop.services.startup import Evidence, Outcome, StartupResult, prepare_storage
+from vascqbank_desktop.services.storage import StorageStatus
 
 log = logging.getLogger(__name__)
 
 EXIT_OK = 0
 EXIT_INTEGRITY_PROBLEM = 1
 EXIT_STORAGE_ERROR = 2
+EXIT_RECOVERY_NEEDED = 3  # no database, but traces of an earlier one: nothing was created
+EXIT_SEED_INVALID = 4  # the bundled seed failed verification: nothing was created
 
 STORAGE_ERRORS: tuple[type[BaseException], ...] = (DatabaseError, OSError, sqlite3.Error)
 
@@ -56,6 +61,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="prepare local storage, print a diagnostic report and exit without opening a window",
     )
+    parser.add_argument(
+        "--seed-dir",
+        metavar="PATH",
+        help="folder with seed-manifest.json and the seed database (default: the bundled seed, if any)",
+    )
     # Automated smoke tests: start the real GUI and quit after N milliseconds.
     parser.add_argument("--exit-after-ms", type=int, default=0, help=argparse.SUPPRESS)
     return parser
@@ -73,6 +83,12 @@ def format_self_check(status: StorageStatus) -> str:
         f"integrity_ok:      {status.integrity_ok}",
         f"sqlite_version:    {status.sqlite_version}",
         f"fts5_trigram:      {status.fts5_trigram}",
+        "seed:              "
+        + (
+            f"{status.seed_version} ({status.seed_kind}, {status.seed_database_id})"
+            if status.seed_version
+            else "-"
+        ),
     ]
     return "\n".join(lines)
 
@@ -86,14 +102,24 @@ def _safe_console() -> None:
                 reconfigure(errors="backslashreplace")
 
 
-def run_self_check(paths: AppPaths) -> int:
+def run_self_check(paths: AppPaths, seed_dir: Path | None = None) -> int:
     _safe_console()
     try:
-        status = initialize_storage(paths)
+        result = prepare_storage(paths, seed_dir)
     except STORAGE_ERRORS as exc:
         log.exception("Self-check failed")
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_STORAGE_ERROR
+    if result.outcome is Outcome.RECOVERY_NEEDED:
+        print("RECOVERY NEEDED: no database, but traces of an earlier one were found; nothing was created:")
+        for evidence in result.evidence:
+            print(f"  {evidence.kind.value}: {len(evidence.paths)}")
+        return EXIT_RECOVERY_NEEDED
+    if result.outcome is Outcome.SEED_INVALID:
+        print(f"SEED INVALID: {result.seed_problem}; nothing was created", file=sys.stderr)
+        return EXIT_SEED_INVALID
+    status = result.status
+    assert status is not None
     print(format_self_check(status))
     return EXIT_OK if status.integrity_ok else EXIT_INTEGRITY_PROBLEM
 
@@ -143,7 +169,79 @@ def install_signal_shutdown(app, window) -> dict[int, object]:  # noqa: ANN001
     return previous
 
 
-def run_gui(paths: AppPaths, argv: Sequence[str], exit_after_ms: int = 0) -> int:
+def ask_recovery(evidence: Sequence[Evidence], data_dir: Path, exit_after_ms: int = 0) -> str:
+    """The Georgian recovery dialog: ``"open"``, ``"new"`` (confirmed twice) or ``"exit"``."""
+    from PySide6.QtCore import QTimer, QUrl
+    from PySide6.QtGui import QDesktopServices
+    from PySide6.QtWidgets import QMessageBox
+
+    from vascqbank_desktop.ui import strings
+
+    lines = [strings.RECOVERY_TEXT, "", strings.RECOVERY_FOUND]
+    lines += [f"• {strings.RECOVERY_EVIDENCE[e.kind.value].format(count=len(e.paths))}" for e in evidence]
+    lines += ["", strings.RECOVERY_HOWTO]
+    box = QMessageBox(QMessageBox.Icon.Warning, strings.RECOVERY_TITLE, "\n".join(lines))
+    box.setDetailedText("\n".join(str(p) for e in evidence for p in e.paths))
+    open_button = box.addButton(strings.RECOVERY_OPEN_FOLDER, QMessageBox.ButtonRole.AcceptRole)
+    new_button = box.addButton(strings.RECOVERY_NEW, QMessageBox.ButtonRole.DestructiveRole)
+    exit_button = box.addButton(strings.RECOVERY_EXIT, QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(exit_button)
+    if exit_after_ms:
+        QTimer.singleShot(exit_after_ms, box.reject)
+    box.exec()
+    clicked = box.clickedButton()
+    if clicked is open_button:
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(data_dir)))
+        return "open"
+    if clicked is new_button:
+        confirm = QMessageBox.question(
+            None,
+            strings.RECOVERY_CONFIRM_TITLE,
+            strings.RECOVERY_CONFIRM_TEXT,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return "new" if confirm == QMessageBox.StandardButton.Yes else "exit"
+    return "exit"
+
+
+def startup(paths: AppPaths, seed_dir: Path | None, exit_after_ms: int = 0) -> StartupResult | int:
+    """Prepare storage with Georgian feedback; an ``int`` is an exit code (nothing was created)."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
+
+    from vascqbank_desktop.ui import strings
+
+    splash = None
+    if seed_dir is not None and not paths.database_file.exists():
+        splash = QLabel(strings.STARTUP_PREPARING)
+        splash.setContentsMargins(28, 20, 28, 20)
+        splash.show()
+        QApplication.processEvents()
+    try:
+        result = prepare_storage(paths, seed_dir)
+        if result.outcome is Outcome.RECOVERY_NEEDED:
+            if splash is not None:
+                splash.close()
+            if ask_recovery(result.evidence, paths.data_dir, exit_after_ms) != "new":
+                return EXIT_RECOVERY_NEEDED
+            result = prepare_storage(paths, seed_dir, allow_new_database=True)
+    finally:
+        if splash is not None:
+            splash.close()
+    if result.outcome is Outcome.SEED_INVALID:
+        box = QMessageBox(QMessageBox.Icon.Critical, strings.SEED_INVALID_TITLE, strings.SEED_INVALID_TEXT)
+        box.setDetailedText(f"{result.seed_problem}\n\n{seed_dir}")
+        if exit_after_ms:
+            QTimer.singleShot(exit_after_ms, box.reject)
+        box.exec()
+        return EXIT_SEED_INVALID
+    return result
+
+
+def run_gui(
+    paths: AppPaths, argv: Sequence[str], exit_after_ms: int = 0, seed_dir: Path | None = None
+) -> int:
     from PySide6.QtCore import QTimer
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication, QMessageBox
@@ -170,7 +268,11 @@ def run_gui(paths: AppPaths, argv: Sequence[str], exit_after_ms: int = 0) -> int
     app.setWindowIcon(icon)
 
     try:
-        status = initialize_storage(paths)
+        prepared = startup(paths, seed_dir, exit_after_ms)
+        if isinstance(prepared, int):
+            return prepared
+        status = prepared.status
+        assert status is not None
     except STORAGE_ERRORS as exc:
         log.exception("Storage initialisation failed")
         box = QMessageBox(QMessageBox.Icon.Critical, strings.STARTUP_ERROR_TITLE, strings.STARTUP_ERROR_TEXT)
@@ -196,6 +298,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     install_excepthook()
     log.info("Starting %s %s (data dir: %s, log: %s)", APP_ID, __version__, paths.data_dir, log_file)
 
+    seed_dir = locate_seed(args.seed_dir)
+    log.info("Seed: %s", seed_dir or "none (manual import)")
     if args.self_check:
-        return run_self_check(paths)
-    return run_gui(paths, [sys.argv[0], *argv], exit_after_ms=args.exit_after_ms)
+        return run_self_check(paths, seed_dir)
+    return run_gui(paths, [sys.argv[0], *argv], exit_after_ms=args.exit_after_ms, seed_dir=seed_dir)

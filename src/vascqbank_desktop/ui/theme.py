@@ -556,6 +556,14 @@ QPushButton#ApproveOutlineButton:disabled {{
     color: {TEXT_MUTED};
     border-color: {BORDER};
 }}
+QLabel#StatusWarning {{
+    color: {WARNING_FG};
+    background: {WARNING_BG};
+    border: 1px solid {WARNING_BORDER};
+    border-radius: 4px;
+    padding: 1px 8px;
+    font-weight: 600;
+}}
 QLabel#SuccessNotice {{
     background: #E6F4EB;
     border: 1px solid #A9D3B8;

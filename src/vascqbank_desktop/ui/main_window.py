@@ -109,6 +109,12 @@ class MainWindow(QMainWindow):
         )
         self.backup_view = BackupView(self._paths)
         self.export_service = ExportService(self._paths)
+        try:  # an export interrupted by a crash is finished (recorded) or undone before anything else
+            reconciled = self.export_service.reconcile()
+            if reconciled.changed:
+                log.warning("Export publication recovered at start-up: %s", reconciled)
+        except Exception:  # never block start-up; the next export runs it again
+            log.exception("Export reconciliation failed")
         self.export_view = ExportView(self.export_service, subjects)
         self.reviewer_view = ReviewerView(self.reviewer_profile)
         self._add_page(PAGE_HOME, self.welcome_view)
@@ -370,6 +376,10 @@ class MainWindow(QMainWindow):
         self.drafts_label = QLabel()
         self.drafts_label.hide()
         bar.addWidget(self.drafts_label)
+        self.seed_label = QLabel(strings.STATUS_DEV_SEED)
+        self.seed_label.setObjectName("StatusWarning")
+        self.seed_label.setVisible(self._status.from_development_seed)  # never mistaken for the real bank
+        bar.addWidget(self.seed_label)
         self.reviewer_label = QLabel(
             strings.STATUS_REVIEWER.format(name=name) if name else strings.STATUS_REVIEWER_NONE
         )

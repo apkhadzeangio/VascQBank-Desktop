@@ -12,12 +12,13 @@ and TXT files**.
 * The application **never generates questions**; it only works with imported ones.
 * The user interface is Georgian; code and technical documentation are English.
 
-> **Status: Phase 6 of 10 — DOCX/TXT export engine.** Working: import (Phase 2); browsing,
-> search, statistics, reviewer profile, sessions and backups (Phase 3); the editor with autosaved
-> drafts and crash recovery (Phase 4); approval, rejection, reopening and revision restoration
-> (Phase 5); and now the **final deliverable**: verified **Word (.docx)** documents — review, exam
-> and answer-key editions — and **paired TXT** files of the approved questions, with a manifest,
-> atomic publication and a proven TXT round trip (see [ARCHITECTURE.md](ARCHITECTURE.md) §22).
+> **Status: Phase 7 of 10 — embedded question bank and safe first launch.** Working: import,
+> browsing and search, the editor with autosave and crash recovery, approval/rejection/restore, and the
+> verified DOCX/TXT export (Phases 2–6); and now a **bundled seed database**: a distribution can carry
+> the validated bank so that the catalog is ready on first launch, without any import — installed
+> only into an empty installation, never over existing work, and never when traces of a lost database
+> exist. Export publication is now crash-consistent (ARCHITECTURE.md §24–§25). The real bank is not
+> in this repository; everything is tested with synthetic data.
 
 ---
 
@@ -64,6 +65,7 @@ Qt chooses Wayland or X11 automatically. On an X11 session, Qt 6 needs the
 | `python -m vascqbank_desktop --self-check` | Prepare local storage, print a diagnostic report, exit (no window) |
 | `python -m vascqbank_desktop --data-dir PATH` | Use another data folder (e.g. a test copy) |
 | `python -m vascqbank_desktop --version` | Print the version |
+| `python -m vascqbank_desktop --seed-dir PATH` | Use this seed folder for a first launch (default: the bundled seed, if any; also `VASCQBANK_SEED_DIR`) |
 
 The data folder can also be set with the `VASCQBANK_DATA_DIR` environment variable.
 
@@ -77,11 +79,35 @@ The data folder can also be set with the `VASCQBANK_DATA_DIR` environment variab
 Inside: `database/vascqbank.sqlite3` (the authoritative database),
 `database/search-index.sqlite3` (a derived search index — safe to delete, rebuilt
 automatically), `backups/` (verified backups, each with a JSON manifest),
-`exports/`, `logs/` and `settings.json` (reviewer name, last subject / question /
+`exports/`, `logs/`, `journal/` (short-lived export publication intents, §25) and `settings.json` (reviewer name, last subject / question /
 status filter, window geometry; written atomically, never in the repository).
 The menu **ფაილი → მონაცემთა საქაღალდის გახსნა** opens it.
 Do not place the data folder inside OneDrive/Dropbox/Google Drive sync folders
 while the application is running.
+
+## First launch and the bundled question bank (Phase 7)
+
+* **With a bundled seed** (a distribution build): on the very first start the verified bank is copied
+  into the data folder with its own database ID — the catalog opens with every question
+  *განხილვის მოლოდინში*; choose a reviewer name and start. Later starts simply open that database; an
+  update of the application never resets, replaces or merges it.
+* **Without a seed** (a source checkout, as in this repository): an empty database and the manual TXT
+  import below, exactly as before. The home page says which applies.
+* **Database missing but traces found** (backups, `-wal` files, exports, settings): the program creates
+  **nothing** and explains what it found. Restore by copying a backup (`backups/vascqbank-….sqlite3`) to
+  `database/vascqbank.sqlite3` while the program is closed, or — after a second confirmation — start a
+  new database; backups are never touched. (Restoring from inside the program is not implemented yet.)
+* A **development seed** (synthetic or incomplete test data) is always labelled
+  „⚠ სინთეზური სატესტო ბანკი“ in the status bar.
+* A damaged bundled seed is refused with a message; nothing is created.
+
+**Building a seed (developers):** `python tools/build_seed.py SOURCE_DIR OUTPUT_DIR --version 2027.1
+--production` builds it through the normal import pipeline and enforces the production gates (12
+subjects, exact target counts, 10,000 questions, no errors, duplicates or conflicts); without
+`--production` the result is a DEVELOPMENT seed. `python tools/prepare_package_seed.py OUTPUT_DIR`
+verifies it and copies it into the package data for a distribution build (DEVELOPMENT seeds only with
+`--allow-development-seed`). **Never commit a seed or the real source files** — `.gitignore` excludes
+them; details in ARCHITECTURE.md §24.7.
 
 ## Importing questions
 
@@ -204,9 +230,11 @@ LibreOffice are in [docs/samples/phase6](docs/samples/phase6).
 
 Rendered from the real window with **synthetic** data (10,000 artificial questions) by
 `tools/capture_screenshots.py`, `tools/capture_screenshots_phase4.py` and
-`tools/capture_screenshots_phase5.py` and `tools/capture_screenshots_phase6.py`; see
+`tools/capture_screenshots_phase5.py`, `…_phase6.py` and `…_phase7.py`; see
 [docs/screenshots/phase3](docs/screenshots/phase3), [docs/screenshots/phase4](docs/screenshots/phase4),
-[docs/screenshots/phase5](docs/screenshots/phase5) and [docs/screenshots/phase6](docs/screenshots/phase6)
+[docs/screenshots/phase5](docs/screenshots/phase5), [docs/screenshots/phase6](docs/screenshots/phase6) and
+[docs/screenshots/phase7](docs/screenshots/phase7) (first launch from a synthetic seed, the recovery and
+damaged-seed messages)
 (the export page, its options, a blocked TXT export, progress and completion) (workflow bar, approve, approve-and-next in a
 filter, reject and reopen dialogs, restore with a draft, the restored history): home dashboard, catalog with the correct
 answer highlighted, search results, backups, the reviewer profile, and (Phase 4) the editor,
@@ -279,7 +307,8 @@ src/vascqbank_desktop/
 ├── importexport/  file discovery, paired-TXT and refined-master parsers, UTF-8 I/O, TXT and Word writers, Word verifier
 ├── ui/            PySide6 widgets: catalog, detail, editor, autosave, workflow, history, drafts, export, backups, reviewer, import; strings, theme, workers
 └── resources/     bundled fonts (Noto Sans, Noto Sans Georgian) and icon
-tools/             capture_screenshots*.py — render the real window; make_export_samples.py — sample export (synthetic data)
+tools/             build_seed.py, prepare_package_seed.py — seed build and packaging; capture_screenshots*.py,
+                   make_export_samples.py — screenshots and samples (synthetic data)
 tests/             pytest suite, incl. layer-boundary, offline, crash-recovery (isolated SIGKILL children on temporary databases) and 10,000-question checks
 ```
 

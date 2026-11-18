@@ -31,6 +31,15 @@ class StorageStatus:
     sqlite_version: str
     fts5_trigram: bool
     pre_migration_backup: Path | None = None
+    # provenance when this working database was installed from a bundled seed (Phase 7)
+    seed_database_id: str | None = None
+    seed_version: str | None = None
+    seed_kind: str | None = None
+    seed_installed_at: str | None = None
+
+    @property
+    def from_development_seed(self) -> bool:
+        return self.seed_kind == "DEVELOPMENT"
 
 
 def initialize_storage(paths: AppPaths) -> StorageStatus:
@@ -72,6 +81,10 @@ def initialize_storage(paths: AppPaths) -> StorageStatus:
             sqlite_version=sqlite3.sqlite_version,
             fts5_trigram=has_fts5_trigram(conn),
             pre_migration_backup=backup_path,
+            seed_database_id=metadata.get("seed_database_id"),
+            seed_version=metadata.get("seed_version"),
+            seed_kind=metadata.get("seed_kind"),
+            seed_installed_at=metadata.get("seed_installed_at"),
         )
     finally:
         conn.close()

@@ -80,3 +80,9 @@ credentials*
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Seed databases and their manifests (Phase 7) — the real bank is private; never commit a seed
+src/vascqbank_desktop/resources/seed/*
+!src/vascqbank_desktop/resources/seed/README.md
+seed-manifest.json
+vascqbank-seed.sqlite3

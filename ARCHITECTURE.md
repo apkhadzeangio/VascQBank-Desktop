@@ -1,6 +1,6 @@
 # VascQBank Review Desktop — Architecture
 
-This document describes the architecture implemented in Phases 1–6 and the design
+This document describes the architecture implemented in Phases 1–7 and the design
 that later phases implement. Sections marked **(implemented)** describe code
 that exists and is tested; sections marked **(design)** are the plan.
 
@@ -693,7 +693,7 @@ thread, list backups newest first, and verify them in the background (manifest s
 SHA-256, read-only open, `integrity_check`, per-table counts). A damaged backup is shown as
 damaged with the reason. There is **no restore action** (§10).
 
-## 16. Seed database distribution (design — documentation only in Phase 3)
+## 16. Seed database distribution (design of Phase 3 — implemented in Phase 7, see §24)
 
 The finished bank will ship *inside* the application as a validated SQLite database.
 
@@ -715,7 +715,8 @@ file in the **writable user-data directory**, verify the copy, rename atomically
 fresh `database_id` (the seed's id is kept as `seed_database_id`, with `seed_version` and
 `seeded_at`, in `app_metadata`) and run the normal migrations (with their automatic
 backup). If the database is missing but backups exist the application does **not** silently
-re-seed; it offers the newest verified backup or an explicit fresh start. All edits affect
+re-seed; it stops and explains (§24.5) — restoring a backup in-app is not implemented yet, the
+user restores by copying a backup file, or explicitly starts a new database. All edits affect
 the writable copy only; the bundled seed is never opened read-write.
 
 **Updates.** An update replaces application files (and its bundled seed) only; the data
@@ -1127,13 +1128,15 @@ db/export_repository.py       record_and_publish(): export_runs rows + folder re
    fingerprint, selection (subjects, formats, editions, layout, font), counts (exported / excluded per
    subject), every question's uid, subject, source number, approved revision id and number, content
    hash and approval time, and every file's path, kind, size and SHA-256.
-7. **Publication**: one `BEGIN IMMEDIATE` inserts the `export_runs` rows (one per format), renames the
-   staging folder to `VascQBank_Export_<yyyymmdd-HHMMSS>-<random>/` and commits. A rename failure rolls
-   the rows back; a commit failure renames the folder back — so a recorded export always exists and a
-   folder never appears unrecorded. An existing folder is never overwritten.
-8. Any failure, cancellation or crash before step 7 leaves no export folder and no row; the staging
-   folder is removed; earlier exports are untouched (tested with disk-full, permission, verification,
-   rename and commit failures). Nothing in the database other than `export_runs` is written.
+7. **Publication** (corrected in Phase 7, §25): a durable intent journal is written; one
+   `BEGIN IMMEDIATE` inserts the `export_runs` rows (one per format); the staging folder is renamed to
+   `VascQBank_Export_<yyyymmdd-HHMMSS>-<random>/`; the transaction commits; the journal is removed. An
+   ordinary failure before the commit renames the folder back and rolls the rows back. **A rename and a
+   commit are not jointly atomic**: a crash between them is completed (verified, then recorded once) or
+   undone by the reconciliation of §25. An existing folder is never overwritten.
+8. Any failure or cancellation before step 7 leaves no export folder and no row; the staging folder is
+   removed; earlier exports are untouched (tested with disk-full, permission, verification, rename and
+   commit failures). Nothing in the database other than `export_runs` is written.
 
 ### 22.3 Output modes and numbering
 
@@ -1198,20 +1201,193 @@ runs on a worker with phase, progress and count; **Cancel** stops before publica
 only after verification and publication. Closing the window during an export asks whether to stop it
 (the worker removes its staging folder before the window closes) or to keep working.
 
-## 23. Phase 7 handoff — bundled seed database distribution
+## 23. Phase 7 handoff (done — see §24 and §25)
 
-* The seed must be built through the **same import pipeline** (§16); the export engine now offers a
-  second check: build the seed, approve nothing, and confirm `ApprovedQuestionsService.snapshot()` is
-  empty and `verify()` is clean — a seed must never contain approvals.
-* `export_runs` is append-only and belongs to the user's database: a seed ships with an **empty**
-  `export_runs`, `drafts` and `draft_discards`; a seed-acceptance test should assert that.
-* The export manifest carries `database_id`; once seeds exist, add `seed_database_id`/`seed_version`
-  from `app_metadata` to the manifest so an export can be traced to the seed it started from.
-* `python-docx` (and its `lxml`) must be included by the packager (PyInstaller hidden imports / data:
-  python-docx ships its default template `docx/templates/default.docx`) — test an export from the frozen
-  build, not only from source.
-* Fonts: Sylfaen is present on Windows; for the Linux AppImage consider shipping DejaVu Sans or checking
-  for it at export time and offering the alternative.
-* **Invariants to keep**: catalog and approved repositories stay read-only; the exporter reads question
-  text only through `ApprovedQuestionsService`; every write is a single transaction; "done" is shown
-  only after the commit; drafts are never deleted implicitly and never exported.
+The Phase 6 handoff items were implemented in Phase 7: seeds built through the same import pipeline
+and checked to contain no reviewer work (empty `export_runs`, `drafts`, `draft_discards`), seed
+provenance in `app_metadata` and in export manifests, the seed folder in the package data, and the
+font note for Linux (§11). Packaging itself stays in Phase 10.
+
+## 24. Bundled seed and first launch (implemented — Phase 7)
+
+### 24.1 Layers
+
+```
+tools/build_seed.py              developer CLI → services/seed_builder.py (uses import_service unchanged)
+tools/prepare_package_seed.py    production gate → copies a verified seed into resources/seed/
+services/seed_service.py         manifest, strict verification, no-overwrite installation, locating
+services/startup.py              prepare_storage(): open / install / stop — the start-up decision
+app/main.py                      Georgian dialogs (preparing, recovery, invalid seed), --seed-dir
+```
+
+### 24.2 Building a seed (developer side)
+
+`python tools/build_seed.py SOURCE OUTPUT --version 2027.1 --production`:
+
+1. discover + **dry run** with `import_service.dry_run` against a fresh empty database (the same parser,
+   validation and conflict rules as a manual import — no second parser);
+2. **gates for every seed**: no blocking validation error, no invalid item, no duplicate ID, no
+   conflict, at least one question; **production gates**: only paired-TXT sources, exactly the 12
+   subjects, each at its target count, 10,000 in total;
+3. **import** with `import_service.commit_import` — every question `PENDING_REVIEW`, one `IMPORT`
+   revision, immutable `original_content_json`;
+4. **compact** with `VACUUM INTO` into one self-contained file in rollback-journal mode, made read-only;
+5. **inspect read-only** (§24.4) and write `seed-manifest.json`; then run the very `verify_seed()` the
+   application runs at first launch;
+6. **publish** the output folder by renaming it into place — an existing artefact is never overwritten.
+
+Anything that fails a production gate can only be built as **DEVELOPMENT**.
+
+### 24.3 The manifest (`seed-manifest.json`, format 1)
+
+```json
+{
+  "manifest_format": 1,
+  "kind": "DEVELOPMENT",
+  "seed_version": "dev-1",
+  "seed_database_id": "57cbed67-735d-4da4-979f-3b53fb7d0495",
+  "built_at": "2026-11-18T14:45:46+00:00",
+  "app_version": "0.7.0",
+  "schema_version": 3,
+  "question_count": 10000,
+  "subjects": {"PAD_CLTI": 1500, "ALI": 900, "…": "…"},
+  "source_files": [{"name": "ALI_questions.txt", "sha256": "1c8c…", "size": 581543}, "…"],
+  "database": {"file": "vascqbank-seed.sqlite3", "sha256": "…", "size": 34938880},
+  "verification": {"integrity_check": "ok", "foreign_key_check": "ok", "all_pending_review": true,
+                   "one_import_revision_per_question": true, "approvals": 0, "drafts": 0,
+                   "export_runs": 0, "warnings": 0},
+  "production_gates": {"passed": true, "failures": []}
+}
+```
+
+Semantics: `kind` is `PRODUCTION` only if every production gate passed at build time and passes again
+at verification; `seed_database_id` is the seed database's own `database_id`; `subjects` sum to
+`question_count`; `database.sha256`/`size` are of the file named in `database.file` (a plain name in the
+same folder); `source_files` are the TXT files the seed was built from; `verification` and
+`production_gates` record what the builder found. Any other `manifest_format` is refused. A new format
+must get a new number.
+
+### 24.4 Verification (never trusting the manifest merely because it exists)
+
+`verify_seed()` parses the manifest strictly, checks the database file's **size and SHA-256**, then opens
+it with `mode=ro&immutable=1` (not one byte — not even the header — is written) and checks: our
+`application_id`; `user_version` equal to the manifest and supported (3 ≤ v ≤ latest); `integrity_check`
+and `foreign_key_check`; `database_id` equal to `seed_database_id`; per-subject counts equal to the
+manifest; **no reviewer work** (every question pending with `lock_version` 0, no approval pointers, exactly
+one `IMPORT` revision per question, only `IMPORTED` events, no drafts, discarded drafts or export runs,
+no installation metadata); and, for a PRODUCTION manifest, the production gates. `require_production`
+refuses DEVELOPMENT seeds (packaging). Tests tamper with every one of these and each is caught,
+including edits whose checksum was re-sealed so that only the content checks can see them.
+
+### 24.5 First launch and every later launch (`prepare_storage`)
+
+1. Temporary files of an interrupted installation (`database/.seed-install-*.partial`) are removed.
+2. **A working database exists → it is opened and migrated as always.** The seed is ignored. An
+   application update never resets, replaces or merges a database; existing work continues through
+   the normal versioned migrations (with their pre-migration backup).
+3. **No database but traces of one** — a backup (`backups/vascqbank-*.sqlite3`), a `-wal`/`-shm`/`-journal`
+   file of the database, the derived search index, a `VascQBank_Export_*` folder in the default export
+   folder, or `settings.json` → **nothing is created** and the dialog *სამუშაო ბაზა ვერ მოიძებნა* explains
+   what was found and how to restore by hand (in-app restore does not exist yet). Choices: open the data
+   folder and exit (default: exit), or — after a second confirmation — create a new database; backups and
+   exports are never touched. `--self-check` exits with code 3.
+4. **No database, a seed** → `verify_seed`, then `install_seed`: stream-copy to
+   `database/.seed-install-<random>.partial` with fsync, compare the copy's SHA-256, give it a **fresh
+   `database_id`**, record provenance (`seed_database_id`, `seed_version`, `seed_kind`,
+   `seed_installed_at`, `seed_manifest_hash`, `installed_by_app_version`) in one transaction, `quick_check`,
+   fsync, then publish with `os.link` (fails if the target exists — never overwrites; a rename that also
+   refuses to replace on Windows is the fallback) and sync the directory. The derived search index is
+   deleted so that it is rebuilt for this database. Then `initialize_storage` switches it to WAL.
+   A seed that fails verification → *ჩაშენებული ბანკი დაზიანებულია*, **no database is created** (exit
+   code 4), so a corrected application can still install.
+5. **No database, no seed** → an empty database, the manual TXT import, exactly as before.
+
+A small "preparing" window is shown only while a seed is installed; a successful start shows no dialog.
+A DEVELOPMENT seed is always labelled — „⚠ სინთეზური სატესტო ბანკი“ in the status bar and its version and
+kind on the home page — so it can never be mistaken for the real bank.
+
+**Interruption.** SIGKILL tests at `copied`, `provenance`, `before-publish` and `published` show that the
+real database name only ever holds a complete, verified, provenance-carrying database; the next start
+cleans the temporary file and installs (or, after `published`, simply opens) it.
+
+### 24.6 Locating the seed
+
+`--seed-dir PATH` beats the environment variable `VASCQBANK_SEED_DIR` beats the package data
+`vascqbank_desktop/resources/seed/` (declared in `pyproject.toml` package data). The public repository
+contains only `resources/seed/README.md`; `.gitignore` excludes `seed-manifest.json` and
+`vascqbank-seed.sqlite3` everywhere, so a private seed cannot be committed by accident (tested).
+
+### 24.7 Packaging with a private production seed (for Phase 10)
+
+1. Obtain the 12 approved source TXT pairs privately (never from or into this repository).
+2. `python tools/build_seed.py /private/source /private/seed-2027.1 --version 2027.1 --production`
+3. `python tools/prepare_package_seed.py /private/seed-2027.1` (refuses DEVELOPMENT seeds unless
+   `--allow-development-seed` is given for a *test* build; never overwrites).
+4. Build the package from that working tree; do **not** commit; delete the copied seed afterwards.
+
+### 24.8 Measured (10,000 synthetic questions, tmpfs-class disk)
+
+| Operation | Measured | Budget |
+|---|---:|---:|
+| Seed build (dry run 0.45 · import 0.85 · compact 0.10 · checks 0.21 s) | 1.7 s | < 60 s |
+| Seed verification (SHA-256 + read-only checks) | 0.10 s | < 10 s |
+| First launch: verify + copy + provenance + publish + open | 0.32 s (install 0.14) | < 30 s |
+| Every later start-up (storage only; no reinstall) | 69 ms | < 2 s |
+| Main window with 10,000 questions | 0.20 s | < 10 s |
+| Search index build after installation | 0.36 s | — |
+| Seed and working database size | 34.9 MB | — |
+
+## 25. Export publication recovery (implemented — Phase 7)
+
+**The problem (audit).** Phase 6 renamed the export folder inside an open SQLite transaction and
+committed afterwards, and documented that as atomic. A filesystem rename and a SQLite `COMMIT` are two
+independent systems: a process killed after the rename and before the commit left a published folder
+whose rows SQLite rolled back — an export without a record. A test also exposed an ordinary error after
+the rename that did not move the folder back.
+
+**The protocol** (`services/export_publication.py`, `db/export_repository.py`):
+
+1. the verified staging folder and its manifest exist;
+2. a durable **intent** `<data>/journal/export-<id>.json` is written (temp file, fsync, rename, directory
+   fsync): export id, staging and final paths, the manifest's SHA-256, and the rows without the manifest
+   body — no question text;
+3. `BEGIN IMMEDIATE`, insert the rows; rename staging → final (never over an existing folder), sync the
+   directory; `COMMIT`. Any exception before the commit renames the folder back and rolls back;
+4. the intent is removed.
+
+**Reconciliation** (`reconcile()`, at start-up in the main window and before every export) per intent:
+rows for the export id exist → remove the intent; the final folder exists → verify the manifest hash and
+**every file's size and SHA-256**, then insert the rows once (`record_once`, keyed by the export id) and
+remove the intent — or, if anything differs, record nothing, keep the folder untouched and move the
+intent to `journal/unverified/`; only the staging folder exists → remove it (publication never
+happened); neither → remove the intent.
+
+**Guarantee, stated precisely.** After any interruption *and the next reconciliation*: a published folder
+whose files match its manifest has exactly one set of `export_runs` rows; a folder that was never
+published is removed; a published folder is never deleted or overwritten; nothing is recorded twice;
+`export_runs` stays append-only. Between the crash and the next start-up a published folder can exist
+without its record. SIGKILL tests cover `journal-written`, `inserted`, `renamed`, `committed`,
+`journal-removed` and a crash inside the reconciliation itself.
+
+## 26. Remaining risks (Phase 7)
+
+* The production gates are tested with the complete **synthetic** bank only; the real 10,000 questions do
+  not exist yet, and their source files may reveal validation findings that need editorial decisions.
+* Backups cannot be restored from inside the application; the recovery dialog explains the manual copy.
+* A seed's integrity is checked against its own manifest; the manifest is not cryptographically signed.
+  Someone able to replace both files inside an installed application could ship a different (but
+  structurally valid) bank. Signing belongs to the packaging phase if required.
+* The recovery evidence is limited to the data folder and the default export folder; exports written
+  elsewhere are not considered.
+* Fsync is best-effort on Windows directories (not supported there); NTFS journalling covers renames.
+
+## 27. Phase 8 handoff
+
+* **In-app backup restore** can now build on §24.5: the recovery dialog is the natural entry point;
+  restore into `database/.restore-*.partial`, verify (`verify_backup`), publish with the same
+  no-overwrite link as the seed install, and keep the replaced database as a backup.
+* **Comparing with a newer seed** (§9 of the brief, never automatic): run `import_service.dry_run` on the
+  seed's source TXT (or read the seed read-only) against the working database; new IDs → offer import,
+  identical → skip, differing → list as conflicts (§7.4). Never replace reviewer work.
+* Keep `prepare_storage` the single place that decides about creating a database, and keep every path
+  that publishes a file a no-overwrite publish.
