@@ -877,7 +877,7 @@ interruption — crash, kill, power loss, a failed update — the next start sim
    question is filtered out, because another question was opened, or because the program was
    restarted.
 
-Verified by tests that kill (`SIGKILL`) *isolated child processes working on temporary
+Verified by tests that kill (`SIGKILL`; `TerminateProcess` on Windows) *isolated child processes working on temporary
 databases* — at an exact SQL statement of a draft write, of a save and of a discard, and the
 entire GUI while a draft is confirmed, while typing is unconfirmed and in the middle of a
 draft write — and then reopen the database: it is sound (`integrity_check`, `foreign_key_check`),
@@ -1854,11 +1854,23 @@ and finally closes the window and checks the database. Results of the Phase 9 ru
 | GUI stress: 14 GUI-heavy test files × 5 fresh runs | 5 × 322 passed, 0 failures, no flaky test seen |
 | GitHub Actions `ubuntu-latest` (`-m "not perf"`, run 44386105979) | 1,162 passed, 1 skipped, lint passed |
 | GitHub Actions `windows-latest` (`-m "not perf"`, run 44386105979) | 1,071 passed, 93 skipped, lint passed |
+| GitHub Actions `windows-latest` after porting the crash suites (run 44393416723) | 1,155 passed, 9 skipped, lint passed |
+| GitHub Actions `ubuntu-latest` (same run 44393416723) | 1,162 passed, 1 skipped (pandoc), lint passed |
 
-The Windows skips are tests explicitly marked POSIX-only: the SIGKILL-based crash suites (restore,
-review, GUI, export publication, seed installation), symbolic-link and POSIX-permission cases, and
-POSIX signal handling. The Phase 9 crash matrix (`test_phase9_crash.py`) and `test_crash_recovery.py`
-do run on Windows, using `TerminateProcess`. The first Windows CI runs failed and led to D10 (§35) and
+In run 44386105979 the SIGKILL-based crash suites (restore, review, GUI, export publication and the
+whole of `test_seed_install.py`) were still skipped on Windows. They now share one helper,
+`tests/crash.py` — `SIGKILL` on POSIX, `os.kill(pid, SIGTERM)` = `TerminateProcess` (exit code 15) on
+Windows, neither of which lets Python clean up — and all of them run on Windows (84 more tests, no
+assertion changed). They revealed no Windows defect: restore's `os.replace`/link publication, the
+export journal and rename, the seed's no-overwrite publication and the SQLite rollbacks behave as on
+Linux after a `TerminateProcess` (the killed child's handles are closed by the kernel before the
+parent continues). The nine remaining Windows skips, each with its reason in the test:
+`test_export_performance.py` (POSIX `resource` module), `test_app_startup.py` graceful SIGTERM
+shutdown (Windows has no catchable termination signal; SIGTERM there *is* TerminateProcess),
+`test_backup_portability.py` (POSIX permission bits), `test_paths.py` (a POSIX absolute path),
+`test_phase9_document_audit.py` (pandoc not installed on the runner), three `test_phase9_security.py`
+symbolic-link cases (unprivileged Windows cannot create symlinks) and `test_ui_helpers.py`
+(`time.tzset`). The first Windows CI runs failed and led to D10 (§35) and
 to the test portability fixes listed in §43.2; earlier runs are kept in the Actions history.
 
 Soak details (single uninterrupted 20-minute run): heartbeat lateness p99 32 ms, max 79 ms (the GUI
