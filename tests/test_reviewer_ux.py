@@ -359,6 +359,8 @@ def test_every_page_fits_every_target_screen(qtbot, window: MainWindow, size: tu
     qtbot.waitUntil(lambda: window.width() <= size[0] and window.height() <= size[1], timeout=WAIT_MS)
     assert window.minimumSizeHint().width() <= size[0] and window.minimumSize().height() <= size[1] - 40
     assert window.catalog_view.go_to("ALI-0003")
+    # the widest position text a full bank produces (the test bank has only 15 questions)
+    window.catalog_view.position_label.setText(strings.CAT_POSITION.format(position="9 999", total="10 000"))
     for page in PAGES:
         window.show_page(page)
         QApplication.processEvents()
@@ -374,7 +376,8 @@ def test_every_page_fits_every_target_screen(qtbot, window: MainWindow, size: tu
             )
             if isinstance(widget, QAbstractButton) and widget.text():
                 # never clipped: the button got at least the width its text needs
-                assert widget.width() >= widget.minimumSizeHint().width() - 2, (page, size, widget.text())
+                # (sizeHint includes the style sheet's padding; minimumSizeHint does not)
+                assert widget.width() >= widget.sizeHint().width() - 2, (page, size, widget.text())
 
 
 def test_the_window_can_be_resized_by_the_user_without_losing_actions(qtbot, window: MainWindow) -> None:

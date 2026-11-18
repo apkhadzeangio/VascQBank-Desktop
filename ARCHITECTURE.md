@@ -1547,7 +1547,10 @@ Draft counts refresh when a draft appears or disappears.
 Checked at 1280×720, 1366×768, 1440×900 and 1920×1080 and after user resizing (`test_reviewer_ux.py`:
 every visible button/combo of every page is inside the window or inside a scroll area, and no button is
 narrower than its text needs). Long questions scroll in the detail panel; the export page's two columns
-sit in a scroll area. High-DPI: Qt 6 scales automatically; a 150 % render is in the screenshots. All of
+sit in a scroll area. Looking at the actual 1280×720 render found the edit button clipped by a few
+pixels (the 4:6 list/detail split left the detail column too narrow once the position read
+"1 500 / 9 996"); the split is now 3:7 and the size test uses a full-bank position text and the
+buttons' full size hint (incl. style-sheet padding). High-DPI: Qt 6 scales automatically; a 150 % render is in the screenshots. All of
 this is **offscreen rendering on Linux**; it is not a test on real Windows or CachyOS desktops.
 
 ### 29.5 Georgian localization
@@ -1580,7 +1583,23 @@ conflicting questions and never replaces edited or approved ones.
 
 ## 31. Measured (Phase 8, 10,000 synthetic questions)
 
-PERF_TABLE
+Offscreen Linux container, tmpfs-class disk; `tests/test_phase8_performance.py` (run with `-s` to
+print). Budgets in the tests are several times these values.
+
+| Operation | Measured |
+|---|---|
+| Next question (median of 50) | 6.1 ms |
+| Quick filter switch (all six) | 0–25 ms |
+| Search incl. 250 ms debounce | 277 ms |
+| Counts incl. drafts per subject | 2.1 ms |
+| Open editor · save revision | 24 ms · 128 ms |
+| Approve and next (median of 10) | 46 ms |
+| Create a verified backup (34 MB) | 166 ms |
+| List backups · verify one backup | 0.2 ms · 64 ms |
+| Restore pre-check (`inspect_backup`) | 83 ms |
+| **Restore** (verify 82 · safety backup 178 · copy 165 · publish 28 · reopen 98) | **552 ms** |
+| Window refresh after a restore | 34 ms |
+| Export page with preview | 213 ms |
 
 ## 32. Remaining risks (Phase 8)
 

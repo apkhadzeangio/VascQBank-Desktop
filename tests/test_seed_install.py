@@ -274,6 +274,10 @@ def _make_evidence(kind: EvidenceKind, paths: AppPaths, seed_template: Path) -> 
         paths.search_index_file.write_bytes(b"index")
     elif kind is EvidenceKind.EXPORTS:
         (paths.exports_dir / "VascQBank_Export_20261118-000000-abcdef").mkdir(parents=True)
+    elif kind is EvidenceKind.DISPLACED:  # a database set aside by a restore (Phase 8)
+        displaced = paths.data_dir / "displaced"
+        displaced.mkdir(parents=True)
+        (displaced / "vascqbank-20261118-000000-000000-displaced.sqlite3").write_bytes(b"db")
     else:
         paths.data_dir.mkdir(parents=True, exist_ok=True)
         paths.settings_file.write_text('{"reviewer_name": "x"}', encoding="utf-8")
